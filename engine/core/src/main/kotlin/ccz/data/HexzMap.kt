@@ -9,6 +9,11 @@ import ccz.io.GameFiles
 class HexzMap(val id: Int, val width: Int, val height: Int, private val cells: ByteArray) {
     fun terrain(x: Int, y: Int): Int = cells[y * width + x].toInt() and 0xff
 
+    /** 劇本改寫地形（0x58 战场障碍设定，例如關上城門）。 */
+    fun setTerrain(x: Int, y: Int, t: Int) {
+        if (inside(x, y)) cells[y * width + x] = t.toByte()
+    }
+
     fun inside(x: Int, y: Int) = x in 0 until width && y in 0 until height
 
     companion object {

@@ -2,9 +2,9 @@ package ccz.text
 
 /**
  * 簡體 → 繁體（台灣用字），等同 OpenCC 的 s2twp 設定：
- *  1. STPhrases + STCharacters 最長比對
+ *  1. CustomPhrases（本專案的修正）+ STPhrases + STCharacters 最長比對
  *  2. TWPhrases 最長比對
- *  3. TWVariants 逐字替換
+ *  3. TWVariantsPhrases + TWVariants 最長比對
  * 原文本來就是繁體的字不會被改動。字典取自 OpenCC（Apache 2.0），見 resources/ccz/opencc/NOTICE.txt。
  */
 object Zh {
@@ -44,9 +44,9 @@ object Zh {
         return Dict(map)
     }
 
-    private val st by lazy { load("STPhrases.txt", "STCharacters.txt") }
+    private val st by lazy { load("CustomPhrases.txt", "STPhrases.txt", "STCharacters.txt") }
     private val twPhrases by lazy { load("TWPhrases.txt") }
-    private val twVariants by lazy { load("TWVariants.txt") }
+    private val twVariants by lazy { load("TWVariantsPhrases.txt", "TWVariants.txt") }
 
     fun toTraditional(s: String): String = twVariants.convert(twPhrases.convert(st.convert(s)))
 }

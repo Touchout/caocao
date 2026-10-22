@@ -18,6 +18,7 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.animation.LinearInterpolator
 import ccz.battle.Battle
+import ccz.battle.BattleSession
 import ccz.battle.BattleSetup
 import ccz.battle.BattleUnit
 import ccz.battle.Direction
@@ -25,34 +26,44 @@ import ccz.battle.Movement
 import ccz.battle.Side
 import ccz.battle.Sprites
 import ccz.battle.UnitInfo
+import ccz.data.HexzMap
 import ccz.data.HexzMap.Companion.TILE
 import ccz.io.GameFiles
+import ccz.script.ScriptEvent
 
 /**
- * 戰場畫面。點武將看資料和移動範圍；點我軍再點範圍內的格子就移動（走路動畫）。
- * 已行動的我軍變灰，右上角「結束回合」重設。
+ * 戰場畫面。先執行戰場劇本的開戰處理（對話、選擇、劇本移動武將），跑完後進入操作：
+ * 點武將看資料和移動範圍；點我軍再點範圍內的格子就移動；右上角「結束回合」。
  */
 @SuppressLint("ViewConstructor")
 class BattleView(
     context: Context,
-    stage: Int,
-    private val battle: Battle,
+    private val session: BattleSession,
     private val files: GameFiles,
-    private val mapImage: Bitmap,
 ) : View(context) {
-    private val data = battle.data
+    private val data = session.data
+    private val battle: Battle? get() = session.battle
+    private var mapImage: Bitmap? = null
+
     private val camera = Matrix()
     private val inverse = Matrix()
     private val sprites = HashMap<Pair<Int, Sprites.Frame>, Bitmap?>()
+    private val faces = HashMap<Int, Bitmap?>()
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val grey = Paint().apply { colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) }); alpha = 200 }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f }
+    private val nameText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 220, 120); textSize = 40f; isFakeBoldText = true }
     private val endTurnRect = RectF()
+    private val optionRects = ArrayList<RectF>()
+
+    /** 劇本目前要顯示的事件；null 表示開戰處理跑完、可以操作。 */
+    private var event: ScriptEvent? = null
+    private var scripting = true
 
     private var selected: BattleUnit? = null
     private var range: Movement.Range? = null
     private var cursor: Pair<Int, Int>? = null
-    private var info: List<String> = listOf(Game.tw(data.stageNames.getOrElse(stage) { "" }) + "　點選武將查看資料與移動範圍")
+    private var info: List<String> = emptyList()
 
     /** 移動動畫中：單位、路徑、目前進度（以格為單位）。 */
     private var walking: Triple<BattleUnit, List<Pair<Int, Int>>, Float>? = null
@@ -73,20 +84,81 @@ class BattleView(
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (walking == null) tap(e.x, e.y)
+            if (walking != null) return true
+            if (scripting) tapScript(e.x, e.y) else tapBattle(e.x, e.y)
             return true
         }
     })
 
     init {
         setBackgroundColor(Color.BLACK)
+        post { advance() }
     }
 
-    private fun tap(sx: Float, sy: Float) {
+    // ---------- 劇本 ----------
+
+    /** 往下執行劇本，直到需要畫面處理的事件。 */
+    private fun advance() {
+        while (true) {
+            val e = session.next()
+            ensureMap()
+            if (e == null) {
+                scripting = false
+                event = null
+                info = listOf(Game.tw(data.stageNames.getOrElse(session.stage) { "" }) + "　戰鬥開始！點選武將查看資料與移動範圍")
+                invalidate()
+                return
+            }
+            if (e is ScriptEvent.Moved) {
+                val u = battle?.unitOf(e.character)
+                if (u != null && mapImage != null) {
+                    animateWalk(u, straightPath(e.fromX, e.fromY, e.toX, e.toY)) { advance() }
+                    return
+                }
+                continue
+            }
+            event = e
+            invalidate()
+            return
+        }
+    }
+
+    private fun tapScript(x: Float, y: Float) {
+        when (val e = event) {
+            is ScriptEvent.Choice, is ScriptEvent.YesNo -> {
+                val i = optionRects.indexOfFirst { it.contains(x, y) }
+                if (i < 0) return
+                session.answer(if (e is ScriptEvent.YesNo) (if (i == 0) 1 else 0) else i + 1)
+                advance()
+            }
+            else -> advance()
+        }
+    }
+
+    private fun ensureMap() {
+        val b = battle ?: return
+        if (mapImage != null) return
+        mapImage = BitmapFactory.decodeFile(files.find(HexzMap.imagePath(b.map.id))!!.absolutePath)
+        fitHeight()
+    }
+
+    private fun straightPath(fx: Int, fy: Int, tx: Int, ty: Int): List<Pair<Int, Int>> {
+        val out = arrayListOf(fx to fy)
+        var x = fx
+        var y = fy
+        while (x != tx) { x += if (tx > x) 1 else -1; out += x to y }
+        while (y != ty) { y += if (ty > y) 1 else -1; out += x to y }
+        return out
+    }
+
+    // ---------- 操作 ----------
+
+    private fun tapBattle(sx: Float, sy: Float) {
+        val b = battle ?: return
         if (endTurnRect.contains(sx, sy)) {
-            battle.endTurn()
+            b.endTurn()
             select(null)
-            info = listOf("新的回合")
+            info = listOf("第 ${b.turn} 回合")
             invalidate()
             return
         }
@@ -99,26 +171,30 @@ class BattleView(
 
         val sel = selected
         val r = range
-        if (sel != null && r != null && sel.side == Side.PLAYER && !sel.moved && r.reachable(x, y) && battle.unitAt(x, y).let { it == null || it === sel }) {
-            val path = battle.move(sel, x, y) ?: return
-            animateWalk(sel, path)
+        if (sel != null && r != null && sel.side == Side.PLAYER && !sel.moved && r.reachable(x, y) && b.unitAt(x, y).let { it == null || it === sel }) {
+            val path = b.move(sel, x, y) ?: return
+            range = null
+            animateWalk(sel, path) {
+                selected = null
+                info = UnitInfo.unit(data, b.tables, b.map, sel, null)
+            }
             return
         }
-        select(battle.unitAt(x, y))
-        if (selected == null) info = UnitInfo.tile(data, battle.map, x, y)
+        select(b.unitAt(x, y))
+        if (selected == null) info = UnitInfo.tile(data, b.map, x, y)
         invalidate()
     }
 
     private fun select(u: BattleUnit?) {
+        val b = battle ?: return
         selected = u
-        range = u?.takeIf { !(it.side == Side.PLAYER && it.moved) }?.let { battle.range(it) }
-        if (u != null) info = UnitInfo.unit(data, battle.tables, battle.map, u, battle.aiOf[u])
+        range = u?.takeIf { !(it.side == Side.PLAYER && it.moved) }?.let { b.range(it) }
+        if (u != null) info = UnitInfo.unit(data, b.tables, b.map, u, b.aiOf[u])
     }
 
-    private fun animateWalk(unit: BattleUnit, path: List<Pair<Int, Int>>) {
-        range = null
+    private fun animateWalk(unit: BattleUnit, path: List<Pair<Int, Int>>, done: () -> Unit) {
         if (path.size < 2) {
-            select(null)
+            done()
             invalidate()
             return
         }
@@ -132,8 +208,7 @@ class BattleView(
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     walking = null
-                    selected = null
-                    info = UnitInfo.unit(data, battle.tables, battle.map, unit, null)
+                    done()
                     invalidate()
                 }
             })
@@ -141,9 +216,15 @@ class BattleView(
         }
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        // 一開始讓整張地圖塞進畫面高度
-        val s = h.toFloat() / mapImage.height
+    // ---------- 繪製 ----------
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) = fitHeight()
+
+    /** 一開始讓整張地圖塞進畫面高度。 */
+    private fun fitHeight() {
+        val img = mapImage ?: return
+        if (height == 0) return
+        val s = height.toFloat() / img.height
         camera.setScale(s, s)
     }
 
@@ -155,9 +236,16 @@ class BattleView(
     }
 
     override fun onDraw(canvas: Canvas) {
+        val b = battle
+        val img = mapImage
+        if (b != null && img != null) drawField(canvas, b, img)
+        if (scripting) drawScript(canvas) else drawHud(canvas)
+    }
+
+    private fun drawField(canvas: Canvas, b: Battle, img: Bitmap) {
         canvas.save()
         canvas.concat(camera)
-        canvas.drawBitmap(mapImage, 0f, 0f, null)
+        canvas.drawBitmap(img, 0f, 0f, null)
 
         paint.style = Paint.Style.FILL
         range?.let { r ->
@@ -166,19 +254,14 @@ class BattleView(
         }
 
         val walk = walking
-        for (u in battle.units) {
-            if (walk != null && walk.first === u) continue
-            val bmp = sprite(u, Sprites.standFrame(u.direction)) ?: continue
-            val p = when {
-                u.side == Side.PLAYER && u.moved -> grey
-                u.hidden -> paint.apply { alpha = 110 }
-                else -> paint.apply { alpha = 255 }
-            }
+        for (u in b.units) {
+            if (u.hidden || (walk != null && walk.first === u)) continue
+            val bmp = sprite(b, u, Sprites.standFrame(u.direction)) ?: continue
+            val p = if (u.side == Side.PLAYER && u.moved) grey else paint.apply { alpha = 255 }
             canvas.drawBitmap(bmp, (u.x * TILE).toFloat(), (u.y * TILE).toFloat(), p)
-            paint.alpha = 255
             drawSideBar(canvas, u, u.x * TILE.toFloat(), u.y * TILE.toFloat())
         }
-        walk?.let { (u, path, t) -> drawWalking(canvas, u, path, t) }
+        walk?.let { (u, path, t) -> drawWalking(canvas, b, u, path, t) }
 
         cursor?.let { (x, y) ->
             paint.style = Paint.Style.STROKE
@@ -187,10 +270,9 @@ class BattleView(
             canvas.drawRect(tileRect(x, y), paint)
         }
         canvas.restore()
-        drawHud(canvas)
     }
 
-    private fun drawWalking(canvas: Canvas, u: BattleUnit, path: List<Pair<Int, Int>>, t: Float) {
+    private fun drawWalking(canvas: Canvas, b: Battle, u: BattleUnit, path: List<Pair<Int, Int>>, t: Float) {
         val i = t.toInt().coerceAtMost(path.size - 2)
         val f = t - i
         val (ax, ay) = path[i]
@@ -198,8 +280,7 @@ class BattleView(
         val d = Direction.between(ax, ay, bx, by)
         val x = (ax + (bx - ax) * f) * TILE
         val y = (ay + (by - ay) * f) * TILE
-        val step = (t * 4).toInt()
-        sprite(u, Sprites.walkFrame(d, step))?.let { canvas.drawBitmap(it, x, y, null) }
+        sprite(b, u, Sprites.walkFrame(d, (t * 4).toInt()))?.let { canvas.drawBitmap(it, x, y, null) }
         drawSideBar(canvas, u, x, y)
     }
 
@@ -209,18 +290,70 @@ class BattleView(
         canvas.drawRect(x + 2f, y + TILE - 6f, x + TILE - 2f, y + TILE - 2f, paint)
     }
 
-    private fun drawHud(canvas: Canvas) {
-        // 資訊列
-        val lineH = text.textSize * 1.3f
+    /** 劇本事件：對話框、訊息、選擇題。 */
+    private fun drawScript(canvas: Canvas) {
+        val e = event ?: return
+        optionRects.clear()
+        val lineH = text.textSize * 1.35f
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb(190, 0, 0, 0)
-        canvas.drawRect(0f, height - lineH * info.size - 24f, width.toFloat(), height.toFloat(), paint)
-        info.forEachIndexed { i, line -> canvas.drawText(line, 24f, height - lineH * (info.size - i - 1) - 24f, text) }
+        when (e) {
+            is ScriptEvent.Dialogue -> {
+                val lines = Game.tw(e.text).split('\n')
+                val boxH = maxOf(FACE + 48f, lineH * (lines.size + 1) + 48f)
+                val top = height - boxH
+                paint.color = Color.argb(215, 10, 10, 30)
+                canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), paint)
+                var x = 24f
+                e.speaker?.let { face(session.face(it)) }?.let {
+                    canvas.drawBitmap(it, null, RectF(24f, top + 24f, 24f + FACE, top + 24f + FACE), null)
+                    x += FACE + 24f
+                }
+                val name = Game.tw(e.speaker?.let { data.characters.getOrNull(it)?.name } ?: e.name)
+                canvas.drawText(name, x, top + 24f + nameText.textSize, nameText)
+                lines.forEachIndexed { i, l -> canvas.drawText(l.trim(), x, top + 24f + nameText.textSize + lineH * (i + 1), text) }
+            }
+            is ScriptEvent.Message -> {
+                val lines = Game.tw(e.text).split('\n')
+                val w = (lines.maxOf { text.measureText(it) } + 96f).coerceAtMost(width - 48f)
+                val h = lineH * lines.size + 64f
+                val r = RectF((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
+                paint.color = Color.argb(225, 20, 20, 40)
+                canvas.drawRoundRect(r, 20f, 20f, paint)
+                lines.forEachIndexed { i, l -> canvas.drawText(l, r.left + 48f, r.top + 32f + text.textSize + lineH * i, text) }
+            }
+            is ScriptEvent.Choice -> drawOptions(canvas, e.options.map { Game.tw(it) }, lineH)
+            is ScriptEvent.YesNo -> drawOptions(canvas, listOf("是", "否"), lineH)
+            is ScriptEvent.Moved -> {}
+        }
+    }
 
-        // 結束回合
+    private fun drawOptions(canvas: Canvas, options: List<String>, lineH: Float) {
+        val w = (options.maxOf { text.measureText(it) } + 120f).coerceAtLeast(360f)
+        val h = lineH + 40f
+        val total = options.size * (h + 20f)
+        var y = (height - total) / 2
+        for (o in options) {
+            val r = RectF((width - w) / 2, y, (width + w) / 2, y + h)
+            paint.color = Color.argb(230, 40, 40, 80)
+            canvas.drawRoundRect(r, 20f, 20f, paint)
+            canvas.drawText(o, r.left + 60f, r.centerY() + text.textSize / 3, text)
+            optionRects += r
+            y += h + 20f
+        }
+    }
+
+    private fun drawHud(canvas: Canvas) {
+        val lineH = text.textSize * 1.3f
+        if (info.isNotEmpty()) {
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(190, 0, 0, 0)
+            canvas.drawRect(0f, height - lineH * info.size - 24f, width.toFloat(), height.toFloat(), paint)
+            info.forEachIndexed { i, line -> canvas.drawText(line, 24f, height - lineH * (info.size - i - 1) - 24f, text) }
+        }
         val label = "結束回合"
         val w = text.measureText(label) + 48f
         endTurnRect.set(width - w - 24f, 24f, width - 24f, 24f + lineH + 24f)
+        paint.style = Paint.Style.FILL
         paint.color = Color.argb(200, 40, 40, 60)
         canvas.drawRoundRect(endTurnRect, 16f, 16f, paint)
         canvas.drawText(label, endTurnRect.left + 24f, endTurnRect.bottom - 30f, text)
@@ -229,25 +362,38 @@ class BattleView(
     private fun tileRect(x: Int, y: Int) = RectF((x * TILE).toFloat(), (y * TILE).toFloat(), ((x + 1) * TILE).toFloat(), ((y + 1) * TILE).toFloat())
 
     /** Unit_mov.e5 的一格動作（48×48），洋紅 (247,0,255) 轉透明，向右的動作用水平鏡像。 */
-    private fun sprite(u: BattleUnit, frame: Sprites.Frame): Bitmap? {
-        val index = BattleSetup.spriteIndex(data, u.character, u.side, battle.setup.imageOverrides)
+    private fun sprite(b: Battle, u: BattleUnit, frame: Sprites.Frame): Bitmap? {
+        val index = BattleSetup.spriteIndex(data, u.character, u.side, b.imageOverrides)
         return sprites.getOrPut(index to frame) {
             runCatching {
                 val strip = files.archive("Unit_mov.e5")[index]
                 val full = BitmapFactory.decodeByteArray(strip, 0, strip.size)
                 val m = Matrix().apply { if (frame.mirror) setScale(-1f, 1f) }
-                val cut = Bitmap.createBitmap(full, 0, frame.index * TILE, TILE, TILE, m, false).copy(Bitmap.Config.ARGB_8888, true)
-                val px = IntArray(TILE * TILE)
-                cut.getPixels(px, 0, TILE, 0, 0, TILE, TILE)
-                for (i in px.indices) if (px[i] and 0xffffff == TRANSPARENT) px[i] = 0
-                cut.setPixels(px, 0, TILE, 0, 0, TILE, TILE)
-                cut
+                keyOut(Bitmap.createBitmap(full, 0, frame.index * TILE, TILE, TILE, m, false))
             }.getOrNull()
         }
     }
 
+    /** E5/Face.e5 的頭像（120×120）。 */
+    private fun face(index: Int): Bitmap? = faces.getOrPut(index) {
+        runCatching {
+            val b = files.archive("E5/Face.e5")[index]
+            keyOut(BitmapFactory.decodeByteArray(b, 0, b.size))
+        }.getOrNull()
+    }
+
+    private fun keyOut(src: Bitmap): Bitmap {
+        val bmp = src.copy(Bitmap.Config.ARGB_8888, true)
+        val px = IntArray(bmp.width * bmp.height)
+        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        for (i in px.indices) if (px[i] and 0xffffff == TRANSPARENT) px[i] = 0
+        bmp.setPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+        return bmp
+    }
+
     companion object {
         private const val MS_PER_TILE = 140L
+        private const val FACE = 180f
         private const val TRANSPARENT = 0xF700FF
         private val SIDE_COLORS = mapOf(
             Side.PLAYER to Color.rgb(230, 60, 60),

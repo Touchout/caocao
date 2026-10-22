@@ -24,6 +24,8 @@ class ZhTest {
         assertEquals("夏侯惇", Zh.toTraditional("夏侯惇"))
         assertEquals("皇后", Zh.toTraditional("皇后"))
         assertEquals("然後再攻擊", Zh.toTraditional("然后再攻击"))
+        assertEquals("誰也不准擅自出擊", Zh.toTraditional("谁也不准擅自出击"))
+        assertEquals("準備", Zh.toTraditional("准备"))
     }
 }
 
@@ -86,7 +88,7 @@ class GameFilesTest {
         val data = GameData(f)
         val tables = ClassTables(f)
         val setup = BattleSetup.from(Eex.parse(f.bytes("RS/S_002.eex")))
-        val battle = Battle(data, tables, HexzMap.load(f, setup.mapId), setup)
+        val battle = Battle.fromSetup(data, tables, HexzMap.load(f, setup.mapId), setup)
         val players = battle.units.filter { it.side == Side.PLAYER }
         assertTrue(players.isNotEmpty())
         for (u in players) {

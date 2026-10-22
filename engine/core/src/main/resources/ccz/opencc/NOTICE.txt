@@ -1,5 +1,3 @@
-OpenCC-Python
-Copyright 2016
-
-This product includes dictionary data and configurations developed by
-[OpenCC](https://github.com/BYVoid/OpenCC).
+簡轉繁字典（STCharacters、STPhrases、TWPhrases、TWVariantsPhrases、TWVariants）取自 OpenCC（Apache License 2.0，
+https://github.com/BYVoid/OpenCC），經由 opencc-js 1.4.2（MIT License，見 LICENSE-opencc-js）的資料檔轉成 tab 分隔文字。
+CustomPhrases.txt 是本專案自己的修正詞表（例如「不准」不轉成「不準」）。

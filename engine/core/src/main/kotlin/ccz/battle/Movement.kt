@@ -26,7 +26,7 @@ class BattleUnit(
     var x: Int,
     var y: Int,
     var direction: Direction,
-    val unitClass: Int,
+    var unitClass: Int,
     var hidden: Boolean = false,
     var moved: Boolean = false,
 ) {

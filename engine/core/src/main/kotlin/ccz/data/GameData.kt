@@ -30,6 +30,8 @@ class GameData(files: GameFiles) {
     /** 每名武將的預設戰場形象（0 = 用兵種通用圖）。 */
     val sImages: IntArray
     val terrainNames: List<String>
+    /** 關卡名稱（Imsg.e5 0xC350 起每筆 200 bytes），索引 = S_nnn 的 nnn；6.6 只有前 100 關有名稱。 */
+    val stageNames: List<String>
 
     init {
         val data = files.archive("Data.e5")
@@ -61,6 +63,8 @@ class GameData(files: GameFiles) {
         classNames = table(ExeLayout.CLASS_NAMES, 720, 9)
         effectNames = table(ExeLayout.EFFECT_NAMES, 4080, 16)
         terrainNames = TERRAIN_NAMES
+        val imsg = files.bytes("Imsg.e5")
+        stageNames = (0 until 100).map { cString(imsg, 0xC350 + it * 200, 200) }
         sImages = IntArray(1024) { i ->
             val p = ExeLayout.S_IMAGES + i * 2
             (exe[p].toInt() and 0xff) or ((exe[p + 1].toInt() and 0xff) shl 8)

@@ -14,6 +14,10 @@
 ## 取得遊戲檔
 `tools/fetch_game.sh <google_drive_file_id> [密碼]`：Drive 檔案需先開「知道連結的人都能檢視」。
 
+## 引擎
+`engine/`（Kotlin）：`core` 純 JVM 邏輯、`app` Android、`desktop` 預覽工具。建置方式見 `engine/README.md`。
+VM 上的遊戲目錄有 ASCII 符號連結 `game/ccz66`，跑 Gradle 時用它。
+
 ## 階段
 1. 盤點檔案：分類圖像、地圖、角色資料、事件腳本、音樂，各自用什麼格式。
 2. 逆向格式：寫解析/匯出工具（`tools/`，Python），圖片轉 PNG、資料轉 JSON、腳本轉可讀指令序列。

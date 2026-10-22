@@ -18,4 +18,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "caocao"
-include(":core")
+include(":core", ":app", ":desktop")

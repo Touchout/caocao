@@ -1,31 +1,57 @@
 package ccz.io
 
+import java.io.File
+import java.io.RandomAccessFile
+
 /**
  * 光榮 LS11/LS12 封包（*.e5）。格式見 docs/formats.md。
  *
  * 目錄是 big-endian 的 (壓縮後大小, 原始大小, 偏移)，一直到第一筆資料的偏移為止。
  * 壓縮後大小 == 原始大小時資料未壓縮。
  */
-class Ls12(private val buf: ByteArray) {
+class Ls12(private val source: Source) {
+    /** 封包內容的來源：整個讀進記憶體，或用 RandomAccessFile 隨用隨讀（大檔用後者）。 */
+    interface Source {
+        val length: Long
+        fun read(offset: Long, size: Int): ByteArray
+    }
+
+    class BytesSource(private val buf: ByteArray) : Source {
+        override val length get() = buf.size.toLong()
+        override fun read(offset: Long, size: Int) = buf.copyOfRange(offset.toInt(), offset.toInt() + size)
+    }
+
+    class FileSource(file: File) : Source {
+        private val raf = RandomAccessFile(file, "r")
+        override val length get() = raf.length()
+        override fun read(offset: Long, size: Int): ByteArray = synchronized(raf) {
+            ByteArray(size).also { raf.seek(offset); raf.readFully(it) }
+        }
+    }
+
+    constructor(buf: ByteArray) : this(BytesSource(buf))
+
     data class Entry(val stored: Int, val size: Int, val offset: Int)
 
     val entries: List<Entry>
     private val dictionary: ByteArray
 
     init {
-        require(isLs(buf)) { "不是 LS 封包" }
-        dictionary = buf.copyOfRange(16, 272)
+        val head = source.read(0, 272)
+        require(isLs(head)) { "不是 LS 封包" }
+        dictionary = head.copyOfRange(16, 272)
         val list = ArrayList<Entry>()
-        var p = 272
-        var end = buf.size
+        var p = 272L
+        var end = source.length
         while (p + 12 <= end) {
-            val stored = be32(buf, p)
-            val size = be32(buf, p + 4)
-            val off = be32(buf, p + 8)
+            val e = source.read(p, 12)
+            val stored = be32(e, 0)
+            val size = be32(e, 4)
+            val off = be32(e, 8)
             p += 12
             if (stored == 0 && size == 0 && off == 0) break
             list += Entry(stored, size, off)
-            end = minOf(end, off)
+            end = minOf(end, off.toLong())
         }
         entries = list
     }
@@ -34,7 +60,7 @@ class Ls12(private val buf: ByteArray) {
 
     operator fun get(index: Int): ByteArray {
         val e = entries[index]
-        val chunk = buf.copyOfRange(e.offset, e.offset + e.stored)
+        val chunk = source.read(e.offset.toLong(), e.stored)
         return if (e.stored == e.size) chunk else decompress(chunk, e.size, dictionary)
     }
 

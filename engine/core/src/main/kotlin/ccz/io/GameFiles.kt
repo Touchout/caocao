@@ -24,7 +24,12 @@ class GameFiles(val root: File) {
         return index.keys.filter { it.startsWith(prefix) && '/' !in it.substring(prefix.length) }.sorted()
     }
 
-    fun archive(path: String): Ls12 = Ls12(bytes(path))
+    private val archives = HashMap<String, Ls12>()
+
+    /** LS 封包，隨用隨讀（不會把整個檔讀進記憶體），同一個檔只開一次。 */
+    fun archive(path: String): Ls12 = synchronized(archives) {
+        archives.getOrPut(path.lowercase()) { Ls12(Ls12.FileSource(find(path) ?: error("找不到遊戲檔：$path"))) }
+    }
 
     companion object {
         val GBK: Charset = Charset.forName("GBK")

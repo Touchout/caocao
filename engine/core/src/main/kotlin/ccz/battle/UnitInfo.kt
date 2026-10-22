@@ -1,5 +1,6 @@
 package ccz.battle
 
+import ccz.data.ClassTables
 import ccz.data.GameData
 import ccz.data.HexzMap
 import ccz.text.Zh
@@ -10,15 +11,15 @@ object UnitInfo {
     private val AI = listOf("被動出擊", "主動出擊", "堅守原地", "攻擊武將", "到指定點", "跟隨武將", "逃到指定點")
     private val SIDE = mapOf(Side.PLAYER to "我軍", Side.ALLY to "友軍", Side.ENEMY to "敵軍")
 
-    fun unit(data: GameData, map: HexzMap, u: Placement): List<String> {
+    fun unit(data: GameData, tables: ClassTables, map: HexzMap, u: BattleUnit, ai: Int? = null): List<String> {
         val c = data.characters[u.character]
-        val cls = data.classNames.getOrElse(c.unitClass) { "兵種${c.unitClass}" }
-        val ai = AI.getOrElse(u.ai) { "方針${u.ai}" }
+        val cls = data.classNames.getOrElse(u.unitClass) { "兵種${u.unitClass}" }
         val terrain = terrainName(data, map, u.x, u.y)
+        val aiText = ai?.let { "　AI：" + AI.getOrElse(it) { "方針$it" } } ?: ""
         return listOf(
             Zh.toTraditional("${c.name}（${SIDE[u.side]}）　$cls　Lv ${c.level}") + if (u.hidden) "　［伏兵］" else "",
             "武力 ${c.force}　統率 ${c.command}　智力 ${c.intelligence}　敏捷 ${c.agility}　運氣 ${c.luck}",
-            Zh.toTraditional("座標 (${u.x}, ${u.y})　地形：$terrain　AI：$ai"),
+            Zh.toTraditional("座標 (${u.x}, ${u.y})　地形：$terrain　移動力 ${tables.movement(u.unitClass)}") + aiText,
         )
     }
 

@@ -1,6 +1,8 @@
 package ccz
 
+import ccz.battle.Battle
 import ccz.battle.BattleSetup
+import ccz.data.ClassTables
 import ccz.battle.Side
 import ccz.data.GameData
 import ccz.data.HexzMap
@@ -63,5 +65,47 @@ class GameFilesTest {
         assertEquals(64580, dt[7].size)
         assertEquals(0x32, dt[7][4].toInt())
         assertTrue(Ls12.isLs(f.bytes("Data.e5")))
+    }
+
+    @Test
+    fun classTables() {
+        val f = files ?: return
+        val t = ClassTables(f)
+        assertEquals(6, t.movement(9))    // 轻骑兵
+        assertEquals(4, t.movement(3))    // 轻步兵
+        assertEquals(2, t.hitArea(6))     // 弓兵：弓兵（一一格）
+        assertEquals(2, t.moveCost(9, 2)) // 轻骑兵在树林
+        assertEquals(ClassTables.IMPASSABLE, t.moveCost(3, 6)) // 步兵不能上山崖
+        assertEquals(23, ClassTables.group(63))
+        assertEquals(1, ClassTables.group(5))
+    }
+
+    @Test
+    fun movementRangeRules() {
+        val f = files ?: return
+        val data = GameData(f)
+        val tables = ClassTables(f)
+        val setup = BattleSetup.from(Eex.parse(f.bytes("RS/S_002.eex")))
+        val battle = Battle(data, tables, HexzMap.load(f, setup.mapId), setup)
+        val players = battle.units.filter { it.side == Side.PLAYER }
+        assertTrue(players.isNotEmpty())
+        for (u in players) {
+            val r = battle.range(u)
+            val power = tables.movement(u.unitClass)
+            for ((x, y) in r.tiles()) {
+                assertTrue(r.cost[y][x] <= power)
+                val other = battle.unitAt(x, y)
+                assertTrue(other == null || other === u, "不能停在有人的格子")
+                val path = r.path(x, y)
+                assertEquals(u.x to u.y, path.first())
+                // 路徑中途（不含起點、終點）不能經過敵軍相鄰格（ZOC）
+                for ((px, py) in path.drop(1).dropLast(1)) {
+                    val adjEnemy = listOf(0 to 1, 1 to 0, 0 to -1, -1 to 0).any { (dx, dy) ->
+                        battle.unitAt(px + dx, py + dy)?.side == Side.ENEMY
+                    }
+                    assertTrue(!adjEnemy, "ZOC：($px, $py) 旁邊有敵軍，不該繼續走")
+                }
+            }
+        }
     }
 }

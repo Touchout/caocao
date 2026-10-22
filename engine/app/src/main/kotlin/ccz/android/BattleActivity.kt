@@ -5,12 +5,14 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Bundle
 import android.widget.TextView
+import ccz.battle.Battle
 import ccz.battle.BattleSetup
+import ccz.data.ClassTables
 import ccz.data.HexzMap
 import ccz.script.Eex
 import kotlin.concurrent.thread
 
-/** 戰場檢視：顯示開戰時的配置，可以拖曳、縮放，點武將看資料。 */
+/** 戰場：開戰配置、點選查看、我軍移動。 */
 class BattleActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,12 +29,12 @@ class BattleActivity : Activity() {
                 require(setup.mapId >= 0) { "劇本裡找不到戰場地圖（0x27 背景显示）" }
                 val map = HexzMap.load(files, setup.mapId)
                 val image = BitmapFactory.decodeFile(files.find(HexzMap.imagePath(setup.mapId))!!.absolutePath)
-                Triple(setup, map, image)
+                Battle(data, ClassTables(files), map, setup) to image
             }
             // View（GestureDetector）要在主執行緒建立
             runOnUiThread {
-                result.onSuccess { (setup, map, image) ->
-                    setContentView(BattleView(this, stage, data, files, setup, map, image))
+                result.onSuccess { (battle, image) ->
+                    setContentView(BattleView(this, stage, battle, files, image))
                 }.onFailure { e ->
                     setContentView(TextView(this).apply {
                         text = "無法載入 S_%03d：\n".format(stage) + e.message

@@ -1,9 +1,11 @@
 package ccz.desktop
 
+import ccz.battle.Battle
 import ccz.battle.BattleSetup
-import ccz.battle.Placement
+import ccz.battle.Direction
 import ccz.battle.Side
 import ccz.battle.UnitInfo
+import ccz.data.ClassTables
 import ccz.data.GameData
 import ccz.data.HexzMap
 import ccz.data.HexzMap.Companion.TILE
@@ -21,7 +23,8 @@ import javax.imageio.ImageIO
 
 /**
  * 把戰場開戰配置畫成 PNG（跟 Android 版 BattleView 同樣的規則）。
- * 用法：./gradlew :desktop:run --args="<遊戲目錄> <關卡編號> <輸出.png> [要顯示資料的武將編號]"
+ * 用法：./gradlew :desktop:run --args="<遊戲目錄> <關卡編號> <輸出.png> [武將編號]"
+ * 給了武將編號就顯示他的資料和移動範圍。
  */
 fun main(args: Array<String>) {
     val files = GameFiles(File(args[0]))
@@ -30,12 +33,11 @@ fun main(args: Array<String>) {
     val setup = BattleSetup.from(Eex.parse(files.bytes("RS/S_%03d.eex".format(stage))))
     val map = HexzMap.load(files, setup.mapId)
     val mapImage = ImageIO.read(files.find(HexzMap.imagePath(setup.mapId)))
-    val players = setup.playerSlots.sortedBy { it.index }.mapIndexedNotNull { i, slot ->
-        setup.forcedPlayers.getOrNull(i)?.let { Placement(it, Side.PLAYER, slot.x, slot.y, slot.direction, 0, false) }
-    }
-    val units = setup.units + players
+    val battle = Battle(data, ClassTables(files), map, setup)
+    val units = battle.units
+    val focus = args.getOrNull(3)?.toInt()?.let { id -> units.firstOrNull { it.character == id } }
 
-    val infoLines = args.getOrNull(3)?.toInt()?.let { id -> units.firstOrNull { it.character == id }?.let { UnitInfo.unit(data, map, it) } }
+    val infoLines = focus?.let { UnitInfo.unit(data, battle.tables, map, it, battle.aiOf[it]) }
         ?: listOf(Zh.toTraditional(data.stageNames.getOrElse(stage) { "" }))
     val panel = 40 + infoLines.size * 30
     val img = BufferedImage(mapImage.width, mapImage.height + panel, BufferedImage.TYPE_INT_RGB)
@@ -45,15 +47,23 @@ fun main(args: Array<String>) {
     g.color = Color(60, 140, 255, 70)
     for (s in setup.playerSlots) g.fillRect(s.x * TILE, s.y * TILE, TILE, TILE)
 
-    val sprites = HashMap<Int, BufferedImage?>()
+    focus?.let { u ->
+        val r = battle.range(u)
+        g.color = if (u.side == Side.ENEMY) Color(255, 60, 60, 90) else Color(60, 120, 255, 100)
+        for ((x, y) in r.tiles()) g.fillRect(x * TILE, y * TILE, TILE, TILE)
+    }
+
+    val sprites = HashMap<Pair<Int, Direction>, BufferedImage?>()
     for (u in units) {
         val index = BattleSetup.spriteIndex(data, u.character, u.side, setup.imageOverrides)
-        val sprite = sprites.getOrPut(index) {
+        val sprite = sprites.getOrPut(index to u.direction) {
             runCatching {
                 val strip = ImageIO.read(ByteArrayInputStream(files.archive("Unit_mov.e5")[index]))
+                val frame = ccz.battle.Sprites.standFrame(u.direction)
                 val f = BufferedImage(TILE, TILE, BufferedImage.TYPE_INT_ARGB)
                 for (y in 0 until TILE) for (x in 0 until TILE) {
-                    val rgb = strip.getRGB(x, 6 * TILE + y)
+                    val sx = if (frame.mirror) TILE - 1 - x else x
+                    val rgb = strip.getRGB(sx, frame.index * TILE + y)
                     f.setRGB(x, y, if (rgb and 0xffffff == 0xF700FF) 0 else rgb)
                 }
                 f
@@ -73,4 +83,5 @@ fun main(args: Array<String>) {
     g.dispose()
     ImageIO.write(img, "png", File(args[2]))
     println("S_%03d 地圖 %d：%d 名武將、%d 個我軍出場格 → %s".format(stage, setup.mapId, units.size, setup.playerSlots.size, args[2]))
+    focus?.let { println("${data.characters[it.character].name} @(${it.x},${it.y}) 可到 ${battle.range(it).tiles().size} 格") }
 }

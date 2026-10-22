@@ -16,10 +16,12 @@
   python3 tools/eex.py <Ekd5.exe> -o <目錄> <file.eex>... 每個檔案輸出成 <目錄>/<檔名>.txt
 """
 import collections
+import json
 import os
 import struct
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "re"))
 
 
@@ -165,20 +167,52 @@ class EexParser:
         return params, p
 
 
-def fmt_param(p):
-    t, v = p
-    if t == "len":
-        return f"len={v:#x}"
-    if t == "raw":
-        return f"#{v}"
-    if t == 5:
-        return '"' + v.replace("\n", "\\n") + '"'
-    if t == 4:
-        return f"{t:02x}:{v}"
-    return f"{t:02x}:{v:#x}" if v >= 0xEFFF else f"{t:02x}:{v}"
+class Annotator:
+    """把參數值換成名稱：型別表 tools/eex_types.json，武將／物品名稱取自 out/data_*.json。"""
+
+    def __init__(self, data_dir=None):
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "eex_types.json"), encoding="utf-8") as f:
+            self.types = {int(k, 16): v for k, v in json.load(f).items() if not k.startswith("_")}
+        self.refs = {}
+        data_dir = data_dir or os.path.join(here, "..", "out")
+        for ref in ("characters", "items"):
+            path = os.path.join(data_dir, f"data_{ref}.json")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    self.refs[ref] = [r["name"] for r in json.load(f)]
+        from hexzmap import TERRAIN_NAMES
+        self.refs["terrain"] = TERRAIN_NAMES
+
+    def fmt(self, p):
+        t, v = p
+        if t == "len":
+            return f"len={v:#x}"
+        if t == "raw":
+            return f"#{v}"
+        if t == 5:
+            return '"' + v.replace("\n", "\\n") + '"'
+        if t == 4:
+            return f"{v}"
+        info = self.types.get(t)
+        if v >= 0xEFFF and v != 0xFFFF and t in (2, 0x38, 0x39):
+            return f"{t:02x}:變數{v:#x}"
+        if info is None:
+            return f"{t:02x}:{v}" if v != 0xFFFF else f"{t:02x}:-"
+        name = info["name"]
+        if v == 0xFFFF:
+            return f"{name}:-"
+        label = None
+        if "enum" in info and v < len(info["enum"]):
+            label = info["enum"][v]
+        elif "ref" in info:
+            table = self.refs.get(info["ref"], [])
+            if v < len(table) and table[v]:
+                label = table[v]
+        return f"{name}:{label}({v})" if label else f"{name}:{v}"
 
 
-def dump(scenes, names, out):
+def dump(scenes, names, out, ann):
     def walk(items, depth):
         for it in items:
             if it[0] == "block":
@@ -188,7 +222,7 @@ def dump(scenes, names, out):
                 it = it[1]
             pos, op, params = it
             name = names.get(op, "?")
-            out.write(f"{pos:06x} {'  ' * depth}{op:02x} {name}  " + " ".join(fmt_param(p) for p in params) + "\n")
+            out.write(f"{pos:06x} {'  ' * depth}{op:02x} {name}  " + " ".join(ann.fmt(p) for p in params) + "\n")
     for s, sections in enumerate(scenes):
         out.write(f"=== scene {s}\n")
         for n, block in enumerate(sections):
@@ -203,6 +237,7 @@ def main(argv):
         return 1
     parser = EexParser(EexEmu(argv[1]))
     names = load_names()
+    ann = Annotator()
     paths = argv[2:]
     out_dir = None
     if paths[:1] == ["-o"]:
@@ -219,9 +254,9 @@ def main(argv):
         if out_dir:
             name = os.path.splitext(os.path.basename(path))[0] + ".txt"
             with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
-                dump(scenes, names, f)
+                dump(scenes, names, f, ann)
         else:
-            dump(scenes, names, sys.stdout)
+            dump(scenes, names, sys.stdout, ann)
     return 1 if failed else 0
 
 

@@ -13,6 +13,7 @@
 
 用法：python3 tools/eex.py <Ekd5.exe> <file.eex>...
 """
+import collections
 import os
 import struct
 import sys
@@ -36,6 +37,9 @@ def load_names():
 # 處理函式會直接改串流指標的指令，結束位置以讀到的參數為準
 JUMP_OPS = {0x76}
 
+# 同一個 opcode 先用模擬器量幾次，型別序列都一樣才改成直接解碼
+LEARN_RUNS = 3
+
 
 class ParseError(Exception):
     pass
@@ -44,6 +48,9 @@ class ParseError(Exception):
 class EexParser:
     def __init__(self, emu):
         self.emu = emu
+        # opcode -> 參數型別序列；None 表示會隨資料變動（一律用模擬器量）
+        self.sigs = {}
+        self.seen = collections.Counter()
 
     def parse(self, data):
         if data[:4] != b"EEX\0":
@@ -106,12 +113,35 @@ class EexParser:
         op = self.u16(pos)
         if op > 0x7B:
             raise ParseError(f"{pos:#x}: 不合法的 opcode {op:#x}")
+        sig = self.sigs.get(op)
+        if sig is not None and self.seen[op] >= LEARN_RUNS:
+            try:
+                params, p = self.decode(pos, op, sig)
+                return (pos, op, params), p
+            except ParseError:
+                self.sigs[op] = None
         end, reads, _, _ = self.emu.run(op, pos + 2)
+        p = pos + 2
+        for at, _ in reads:
+            if at < p:
+                raise ParseError(f"{pos:#x} op {op:#x}: 參數位置不連續")
+            p = at
+        wants = tuple(w for _, w in reads)
+        params, p = self.decode(pos, op, wants)
+        if p != end and op not in JUMP_OPS:
+            raise ParseError(f"{pos:#x} op {op:#x}: 參數結束 {p:#x}，引擎停在 {end:#x}")
+        if op not in self.sigs:
+            self.sigs[op] = wants
+        elif self.sigs[op] != wants:
+            self.sigs[op] = None
+        self.seen[op] += 1
+        return (pos, op, params), p
+
+    def decode(self, pos, op, wants):
+        """依型別序列解出參數；型別碼對不上就丟 ParseError。"""
         params = []
         p = pos + 2
-        for at, want in reads:
-            if at != p:
-                raise ParseError(f"{pos:#x} op {op:#x}: 參數位置不連續")
+        for want in wants:
             t = self.u16(p)
             if want == 1:
                 params.append(("raw", t))
@@ -130,9 +160,7 @@ class EexParser:
                 v = self.u16(p + 2)
                 p += 4
             params.append((t, v))
-        if p != end and op not in JUMP_OPS:
-            raise ParseError(f"{pos:#x} op {op:#x}: 參數結束 {p:#x}，引擎停在 {end:#x}")
-        return (pos, op, params), p
+        return params, p
 
 
 def fmt_param(p):

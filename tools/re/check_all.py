@@ -22,3 +22,8 @@ for f in files:
 print(f'{ok}/{len(files)} 成功，{time.time()-t:.0f}s')
 for k, c in errs.most_common(30):
     print(c, samples[k])
+
+import json
+sigs = {f'{op:02x}': (None if v is None else [f'{t:02x}' for t in v]) for op, v in sorted(p.sigs.items())}
+json.dump(sigs, open(os.path.join(os.path.dirname(__file__), '..', 'eex_signatures.json'), 'w'), indent=0)
+print('variable opcodes:', [k for k, v in sigs.items() if v is None])

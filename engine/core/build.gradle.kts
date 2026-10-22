@@ -15,6 +15,7 @@ kotlin {
 
 dependencies {
     testImplementation(kotlin("test"))
+    testImplementation("org.json:json:20240303")
 }
 
 tasks.test {

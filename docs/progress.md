@@ -25,9 +25,9 @@
 
 ## 進行中：v0.4 劇本直譯器
 
-1. [ ] 看 0x77 变量运算、0x79 变量测试、0x05 变量测试、0x78 整型变量赋值 的處理函式，確定變數空間
-   （整型變數在 0x502000 + 4n，指標變數 *p / p / &p 的語意）與運算規則；寫進 `docs/battle.md` 或新的 `docs/script.md`。
-2. [ ] 看條件區塊的執行規則：section 條件 + opcode 0 + 長度、子事件 opcode 1、else（0x03）怎麼跳。
+1. [x] 變數系統與 0x77/0x79/0x05/0x0B/0x78/0x76/0x0A 語意（`docs/script.md`）；`EngineMemory`、`VarOps`；
+   `tools/re/gen_vectors.py` 用模擬器跑原版產生 1200 筆測試資料，`VarOpsTest` 全部吻合。
+2. [x] 區塊執行規則：section 條件、opcode 0/1、else（`docs/script.md`「區塊與控制流程」）。
 3. [ ] core：直譯器骨架（變數、條件、跳過區塊），先支援戰前 section 會用到的指令：
    0x77/0x79/0x05/0x78、0x44/0x45/0x46/0x47/0x4A/0x4B、0x27、0x75、0x14/0x15 对话、0x16 信息、0x02 内部信息。
 4. [ ] 敵軍等級：S_002「敵軍等級調整」用變數計算，執行後的等級要合理（跟原版對照）。

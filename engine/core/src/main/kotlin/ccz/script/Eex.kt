@@ -77,14 +77,24 @@ object Eex {
 
     fun parse(data: ByteArray): Script = Parser(data).parse()
 
+    /** 解出 pos 處的一個指令，回傳 (指令, 下一個指令的位置)。 */
+    fun decode(data: ByteArray, pos: Int): Pair<Instr, Int> = Parser(data).parseInstr(pos)
+
+    /** scene 偏移表。 */
+    fun sceneOffsets(data: ByteArray): List<Int> = Parser(data).sceneOffsets()
+
     private class Parser(val d: ByteArray) {
         fun u16(p: Int) = (d[p].toInt() and 0xff) or ((d[p + 1].toInt() and 0xff) shl 8)
         fun i32(p: Int) = u16(p) or (u16(p + 2) shl 16)
 
-        fun parse(): Script {
+        fun sceneOffsets(): List<Int> {
             if (!(d[0] == 'E'.code.toByte() && d[1] == 'E'.code.toByte() && d[2] == 'X'.code.toByte())) throw EexParseException("不是 EEX")
             val first = i32(0x0A)
-            val offsets = (0x0A until first step 4).map { i32(it) }
+            return (0x0A until first step 4).map { i32(it) }
+        }
+
+        fun parse(): Script {
+            val offsets = sceneOffsets()
             val scenes = offsets.mapIndexed { n, off ->
                 val end = offsets.getOrNull(n + 1) ?: d.size
                 parseScene(off, end)

@@ -33,4 +33,5 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }

@@ -7,8 +7,8 @@ import ccz.text.Zh
 import java.io.File
 
 /**
- * 遊戲資料。App 不附任何原版素材：玩家把自己的遊戲目錄整個複製到
- * Android/data/ccz.android/files/game/（Ekd5.exe、Data.e5、E5/、MAP/、RS/… 都在這一層）。
+ * 遊戲資料。App 不附任何原版素材：玩家在 App 裡選自己的遊戲資料夾，由 GameImporter 複製到
+ * Android/data/ccz.android/files/game/（也可以手動複製到這裡）。
  */
 object Game {
     @Volatile private var loaded: Pair<GameFiles, GameData>? = null
@@ -22,6 +22,9 @@ object Game {
     fun load(context: Context): Pair<GameFiles, GameData> = loaded ?: synchronized(this) {
         loaded ?: GameFiles(dir(context)).let { f -> (f to GameData(f)).also { loaded = it } }
     }
+
+    /** 重新匯入後要清掉快取。 */
+    fun reset() = synchronized(this) { loaded = null }
 
     val files get() = loaded!!.first
     val data get() = loaded!!.second

@@ -5,6 +5,7 @@
 import glob
 import json
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,10 +17,36 @@ SIGNATURES = [
     (b"\x89PNG", ".png"),
 ]
 
-# Data.e5 各區段：(項目索引, 名稱, 每筆大小)
+# Data.e5 各區段：(項目索引, 名稱, 每筆大小, 名稱長度, 欄位)
+# 欄位：(名稱, 偏移, 格式)；名稱前加 ? 的是推測，還沒對照遊戲驗證
 DATA_TABLES = [
-    (0, "characters", 32),
-    (1, "items", 25),
+    (0, "characters", 32, 13, [
+        ("?r_image", 0x0D, "<H"),
+        ("?face", 0x0F, "B"),
+        ("?unknown_10", 0x10, "B"),
+        ("force", 0x12, "B"),          # 武力
+        ("command", 0x13, "B"),        # 统率
+        ("intelligence", 0x14, "B"),   # 智力
+        ("agility", 0x15, "B"),        # 敏捷
+        ("luck", 0x16, "B"),           # 运气
+        ("?hp_base", 0x17, "<H"),
+        ("level", 0x19, "B"),
+        ("unit_class", 0x1A, "B"),     # 兵种，名稱見 CczEditor-Star5.6.config 的 <Forces>
+        ("?weapon", 0x1D, "B"),        # 0xff = 無
+        ("?armor", 0x1E, "B"),
+        ("?accessory", 0x1F, "B"),
+    ]),
+    (1, "items", 25, 15, [
+        ("?icon", 0x0F, "<H"),
+        ("?category", 0x11, "B"),
+        ("?effect", 0x12, "B"),        # 0xff = 無
+        ("?effect_value", 0x13, "B"),
+        ("?sort", 0x14, "B"),
+        ("?base_value", 0x15, "B"),
+        ("?growth", 0x16, "B"),
+        ("?unknown_17", 0x17, "B"),
+        ("?special", 0x18, "B"),
+    ]),
 ]
 
 
@@ -57,12 +84,16 @@ def read_name(rec):
 
 def export_data(game, out):
     items = ls12.read_archive(os.path.join(game, "Data.e5"))
-    for idx, name, stride in DATA_TABLES:
+    for idx, name, stride, name_len, fields in DATA_TABLES:
         blob = items[idx][4]
         rows = []
         for n in range(len(blob) // stride):
             rec = blob[n * stride:(n + 1) * stride]
-            rows.append({"id": n, "name": read_name(rec[:16]), "raw": rec[16:].hex()})
+            row = {"id": n, "name": read_name(rec[:name_len])}
+            for key, off, fmt in fields:
+                row[key] = struct.unpack_from(fmt, rec, off)[0]
+            row["raw"] = rec[name_len:].hex()
+            rows.append(row)
         with open(os.path.join(out, f"data_{name}.json"), "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=1)
         print(f"Data.e5[{idx}] → data_{name}.json（{len(rows)} 筆）")

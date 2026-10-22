@@ -99,6 +99,25 @@ def export_data(game, out):
         print(f"Data.e5[{idx}] → data_{name}.json（{len(rows)} 筆）")
 
 
+# Ekd5.exe 裡的名稱表（6.6 版）：(檔案偏移, 總長, 每筆長度)
+EXE_TABLES = {
+    "effects": (0x9E800, 4080, 16),       # 特效名稱，編號 = 0x4101D9 的特效參數
+    "unit_classes": (0xD18D0, 720, 9),    # 兵種名稱，80 種
+}
+
+
+def export_exe_tables(game, out):
+    with open(os.path.join(game, "Ekd5.exe"), "rb") as f:
+        exe = f.read()
+    tables = {}
+    for name, (off, size, stride) in EXE_TABLES.items():
+        seg = exe[off:off + size]
+        tables[name] = [read_name(seg[i:i + stride]) for i in range(0, size, stride)]
+    with open(os.path.join(out, "exe_tables.json"), "w", encoding="utf-8") as f:
+        json.dump(tables, f, ensure_ascii=False, indent=0)
+    print("Ekd5.exe 名稱表 → exe_tables.json")
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
@@ -108,6 +127,7 @@ def main(argv):
     os.makedirs(out, exist_ok=True)
     summary = export_archives(game, out)
     export_data(game, out)
+    export_exe_tables(game, out)
     with open(os.path.join(out, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
     return 0

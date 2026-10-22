@@ -11,7 +11,9 @@
 
 指令要讀幾個參數由 opcode 的處理函式決定，這裡用 tools/re/eexemu.py 模擬原版 exe 來量。
 
-用法：python3 tools/eex.py <Ekd5.exe> <file.eex>...
+用法：
+  python3 tools/eex.py <Ekd5.exe> <file.eex>...          反組譯到 stdout
+  python3 tools/eex.py <Ekd5.exe> -o <目錄> <file.eex>... 每個檔案輸出成 <目錄>/<檔名>.txt
 """
 import collections
 import os
@@ -201,10 +203,26 @@ def main(argv):
         return 1
     parser = EexParser(EexEmu(argv[1]))
     names = load_names()
-    for path in argv[2:]:
-        scenes = parser.parse(open(path, "rb").read())
-        dump(scenes, names, sys.stdout)
-    return 0
+    paths = argv[2:]
+    out_dir = None
+    if paths[:1] == ["-o"]:
+        out_dir, paths = paths[1], paths[2:]
+        os.makedirs(out_dir, exist_ok=True)
+    failed = 0
+    for path in paths:
+        try:
+            scenes = parser.parse(open(path, "rb").read())
+        except ParseError as e:
+            print(f"{path}: {e}", file=sys.stderr)
+            failed += 1
+            continue
+        if out_dir:
+            name = os.path.splitext(os.path.basename(path))[0] + ".txt"
+            with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
+                dump(scenes, names, f)
+        else:
+            dump(scenes, names, sys.stdout)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -46,6 +46,14 @@ class SessionTest {
         println("不認得的指令：" + s.vm.unknown.entries.sortedByDescending { it.value }.joinToString { "%02x×%d".format(it.key, it.value) })
     }
 
+    /** 對話頭像（原版 0x40765C）：頭像表的值 + 7；曹操 0 → 第 0 張。使用者回報許子將顯示成女生（之前沒加 7）。 */
+    @Test
+    fun faceIndex() {
+        val f = files ?: return
+        val s = BattleSession(f, GameData(f), ClassTables(f), 0)
+        assertEquals(listOf(0, 8, 13, 213), listOf(0, 1, 3, 157).map { s.face(it) })   // 曹操、夏侯惇、關羽、許子將
+    }
+
     /** 暫時的出陣畫面：出陣的武將當成已入隊，S_001（汜水關）照出場格放上地圖。 */
     @Test
     fun testArmySortie() {

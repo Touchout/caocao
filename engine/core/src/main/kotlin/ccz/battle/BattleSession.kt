@@ -267,7 +267,14 @@ class BattleSession(
     override fun characterByName(name: String): Int? = nameIndex[name] ?: nameIndex[Zh.toTraditional(name)]
 
     /** 頭像編號（劇本改過的優先）。 */
-    fun face(character: Int): Int = attr(character, ATTR_FACE).toInt()
+    /**
+     * 對話頭像在 Face.e5 的索引（原版 0x40765C）：頭像表 0x50F000 的值（武將 & 0xFFF），不是 0 時 + 7
+     * （Face.e5 開頭幾張是曹操不同時期的頭像）。
+     */
+    fun face(character: Int): Int {
+        val v = mem.u16(Attributes.FACES + 2L * (character and 0xFFF))
+        return if (v == 0) 0 else v + 7
+    }
 
     /**
      * 0x46 友軍每人 11 個參數：武將, 26 隱藏, x, y, 2B 朝向, 3E 等級, 45, 07 AI, 目標武將, 目標x, 目標y

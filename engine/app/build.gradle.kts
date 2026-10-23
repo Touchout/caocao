@@ -13,8 +13,8 @@ android {
         applicationId = "ccz.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 43
-        versionName = "0.4.3"
+        versionCode = 44
+        versionName = "0.4.4"
     }
 
     // 固定的 debug 簽章：雲端 VM 每次都會產生新的 ~/.android/debug.keystore，簽章不同的新版裝不上去（不能覆蓋舊版）

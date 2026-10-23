@@ -18,6 +18,15 @@ sealed interface ScriptEvent {
 
     /** 劇本移動了武將（0x32 武将移动），畫面可以播走路動畫；狀態已經更新。 */
     data class Moved(val character: Int, val fromX: Int, val fromY: Int, val toX: Int, val toY: Int) : ScriptEvent
+
+    /** 回合／階段開始的提示（原版 0x44AC28）：turn 從 1 起，side 0 = 我軍、2 = 敵軍。 */
+    data class TurnStart(val turn: Int, val side: Int) : ScriptEvent
+
+    /** 輪到玩家操作（原版 0x44E0D9）：操作完呼叫 BattleSession.endPlayerPhase，每個單位行動後呼叫 afterAction。 */
+    data object PlayerPhase : ScriptEvent
+
+    /** 戰鬥結束：result 是戰場物件 +1（2 = 0x49 战斗结束，通常是勝利；3 = 失敗或回合用完）。 */
+    data class BattleEnd(val result: Int) : ScriptEvent
 }
 
 /**
@@ -287,6 +296,9 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
     }
 
     /** 條件指令：回傳 null 表示要先問玩家（0x04）。 */
+    /** 單獨算一條條件指令（比對測試用；參數要已經是實際的值）。 */
+    fun evaluate(ins: Instr): Boolean? = evalTest(ins)
+
     private fun evalTest(ins: Instr): Boolean? {
         val p = ins.params
         return when (ins.op) {
@@ -297,7 +309,26 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
             0x79 -> VarOps.compare(mem, p[0].value, p[1].value.toLong() and MASK, p[2].value, p[3].value, p[4].value.toLong() and MASK)
             0x13 -> selection == p[0].value
             0x04 -> answer?.let { answer = null; it != 0 }
+            0x37 -> moneyTest(p[0].value and 0xffff, p[1].value.toLong() and MASK, p[2].value and 0xffff)
             else -> host.test(ins, this)
+        }
+    }
+
+    /**
+     * 0x37 钱、章节编号、忠奸测试（0x4118BD）：(項目, 值, 比較)。項目 0 = 金錢 [0x4B077C]（dword），1 = 章節 = word [0x4B0776] / 2
+     * （最多 0x7F），2 = byte [0x4B0782]；比較 0 ≥、1 <、其他 =（無號）。其他項目原版拿未初始化的區域變數比，當成還沒處理。
+     */
+    private fun moneyTest(kind: Int, v: Long, cmp: Int): Boolean? {
+        val x = when (kind) {
+            0 -> mem.u32(0x4B077CL)
+            1 -> minOf(mem.u16(0x4B0776L) / 2, 0x7F).toLong()
+            2 -> mem.u8(0x4B0782L).toLong()
+            else -> { gaps.merge("0x37 項目 $kind（未初始化）", 1, Int::plus); return null }
+        }
+        return when (cmp) {
+            0 -> x >= v
+            1 -> x < v
+            else -> x == v
         }
     }
 
@@ -306,9 +337,18 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
      * - 型別 04（i32）是負數、而且 opcode < 0x6E：整數變數 −值。
      * - 武將型別（02、38、39）在 0xEFFF..0xFFFE：整數變數 0xFFFE − 值（0xFFFF 是「無」，不換）。
      */
+    /** 劇本資料不會變，解碼結果（變數參照換成值之前）依位置快取。 */
+    private val decoded = HashMap<Int, Pair<Instr, Int>>()
+    /** 有變數參照、每次都要換成目前值的位置。 */
+    private val withVars = HashSet<Int>()
+
     private fun decode(at: Int): Pair<Instr, Int> {
-        val (ins, after) = Eex.decode(data, at)
-        if (ins.params.none { needsVar(ins.op, it) }) return ins to after
+        val cached = decoded[at] ?: Eex.decode(data, at).also { d ->
+            decoded[at] = d
+            if (d.first.params.any { needsVar(d.first.op, it) }) withVars += at
+        }
+        if (at !in withVars) return cached
+        val (ins, after) = cached
         val params = ins.params.map { p ->
             if (!needsVar(ins.op, p)) p
             else Param(p.type, mem.intVar(if (p.type == 4) -p.value else 0xFFFE - p.value).toInt(), p.text)

@@ -17,7 +17,8 @@ import trace_original as t  # noqa: E402
 from eexemu import SCRIPT  # noqa: E402
 
 BATTLE = 0x4B3D08
-OPS = [0x3F, 0x40, 0x25, 0x26, 0x2E, 0x36, 0x41]
+OPS = [0x3F, 0x40, 0x25, 0x26, 0x2E, 0x36, 0x41, 0x37]
+GLOBALS = [(0x4B077C, 4), (0x4B0776, 2), (0x4B0782, 1)]   # 0x37 的金錢、章節、忠奸
 
 
 def main(argv):
@@ -52,11 +53,15 @@ def main(argv):
         if typ == 0x02:
             return who()
         if typ == 0x04:
+            if op == 0x37:
+                return rnd.choice([rnd.randrange(130), rnd.randrange(5000), rnd.randrange(256)])
             if op in (0x25, 0x26, 0x41) or (op == 0x36 and i == 2 and rnd.random() < 0.3):
                 return rnd.choice([rnd.randrange(max(w, h) + 2), rnd.randrange(256)])
             return rnd.choice([rnd.randrange(40), rnd.randrange(600), 0])
         if typ == 0x24:
             return rnd.choice([0, 1, 2, 3])
+        if typ == 0x28:
+            return rnd.choice([0, 1, 2])
         if typ == 0x48:
             return rnd.choice([0, 1, 2, 3])
         if typ == 0x26:
@@ -94,6 +99,11 @@ def main(argv):
         mu.mem_write(grid, bytes(occ))
         mu.mem_write(BATTLE + 2, bytes([turn]))
         mu.mem_write(BATTLE + 0x10, bytes([side]))
+        glob = []
+        for addr, n in GLOBALS:
+            v = rnd.choice([rnd.randrange(1 << (8 * n)), rnd.randrange(300), rnd.randrange(5000)]) & ((1 << (8 * n)) - 1)
+            mu.mem_write(addr, v.to_bytes(n, "little"))
+            glob.append([addr, n, v])
         tests = []
         for _ in range(per):
             op = rnd.choice(OPS)
@@ -122,7 +132,7 @@ def main(argv):
             _, ret, ok = o.exec_op(op, scratch)
             changed = bytes(mu.mem_read(t.UNITS, 250 * 0x30)) != before
             tests.append({"op": op, "params": params, "ret": ret & 0xFF, "ok": ok, "changed": changed})
-        vectors.append({"turn": turn, "side": side, "units": units.hex(), "occupant": occ.hex(), "tests": tests})
+        vectors.append({"turn": turn, "side": side, "globals": glob, "units": units.hex(), "occupant": occ.hex(), "tests": tests})
 
     with open(out, "w") as f:
         json.dump({"width": w, "height": h, "groups": vectors}, f)

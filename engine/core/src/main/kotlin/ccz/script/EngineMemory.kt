@@ -34,17 +34,17 @@ class EngineMemory(exe: ByteArray) {
 
     fun u8(addr: Long): Int {
         val o = addr - BASE
-        if (o in 0 until image.size) return image[o.toInt()].toInt() and 0xff
+        if (o >= 0 && o < image.size) return image[o.toInt()].toInt() and 0xff
         val h = addr - HEAP
-        if (h in 0 until HEAP_SIZE) return heap[h.toInt()].toInt() and 0xff
+        if (h >= 0 && h < HEAP_SIZE) return heap[h.toInt()].toInt() and 0xff
         return (extra[addr]?.toInt() ?: 0) and 0xff
     }
 
     fun setU8(addr: Long, v: Int) {
         val o = addr - BASE
-        if (o in 0 until image.size) { image[o.toInt()] = v.toByte(); return }
+        if (o >= 0 && o < image.size) { image[o.toInt()] = v.toByte(); return }
         val h = addr - HEAP
-        if (h in 0 until HEAP_SIZE) { heap[h.toInt()] = v.toByte(); return }
+        if (h >= 0 && h < HEAP_SIZE) { heap[h.toInt()] = v.toByte(); return }
         extra[addr] = v.toByte()
     }
 

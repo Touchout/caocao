@@ -88,18 +88,59 @@ class BattleSession(
         if (vm.sceneCount > 1) eventChecks = vm.sections(1).size
     }
 
+    /** 回合流程（[startTurns] 之後才有）。 */
+    var flow: TurnFlow? = null
+        private set
+    /** 等玩家操作（[ScriptEvent.PlayerPhase] 之後，到 [endPlayerPhase]）。 */
+    var playerPhase = false
+        private set
+
+    /**
+     * 下一個要畫面處理的事件。開戰處理（scene 0）跑完時回傳一次 null；呼叫 [startTurns] 後繼續照回合流程進行，
+     * 輪到玩家時回傳 [ScriptEvent.PlayerPhase]，之後在玩家操作期間只會回傳戰場事件（沒有時 null）。
+     */
     fun next(): ScriptEvent? {
+        while (true) {
+            scriptNext()?.let { return it }
+            if (!setupDone) { setupDone = true; return null }
+            val f = flow ?: return null
+            if (playerPhase) {
+                if (mem.u8(BattleTests.BATTLE + 1) == 0) return null
+                playerPhase = false    // 戰場事件分出了勝敗：我軍操作結束
+            }
+            if (!f.steps.hasNext()) return null
+            when (val s = f.steps.next()) {
+                TurnFlow.Step.Events -> checkEvents()
+                is TurnFlow.Step.Show -> return s.event
+                TurnFlow.Step.Player -> { playerPhase = true; return ScriptEvent.PlayerPhase }
+            }
+        }
+    }
+
+    /** 劇本事件：先跑完正在執行的，再依 [checkEvents] 剩下的次數選下一個成立的戰場事件。 */
+    private fun scriptNext(): ScriptEvent? {
         while (true) {
             val e = vm.next()
             if (e != null) return e
-            if (!setupDone) { setupDone = true; return null }
-            if (eventChecks <= 0 || !vm.idle) return null
+            if (!setupDone || eventChecks <= 0 || !vm.idle) return null
             eventChecks--
             val sel = vm.selectEvent(1)
             if (sel == null) { eventChecks = 0; return null }
             vm.startEvent(1, sel)
         }
     }
+
+    /** 開戰處理跑完後開始回合流程（原版戰場主函式 0x44F058 → 回合迴圈 0x44EEE5）。 */
+    fun startTurns() {
+        val f = field ?: return
+        if (flow == null) flow = TurnFlow(f) { vm.gaps.merge(it, 1, Int::plus) }
+    }
+
+    /** 玩家的單位行動完（原版 0x4065D9：檢查戰場事件）。 */
+    fun afterAction() = checkEvents()
+
+    /** 玩家結束這回合的操作。 */
+    fun endPlayerPhase() { playerPhase = false }
 
     fun answer(value: Int) = vm.answer(value)
 
@@ -182,6 +223,9 @@ class BattleSession(
             // 認得但原型還不處理的：绘图、CD音轨、音效、信息传送、菜单处理、
             // 延时、战场动作设定、战场操作开始、方针变更、单挑动作…
             0x45 -> globals(p.map { it.value })
+            // 战斗结束（0x417AD7）／战斗失败（0x415890）：戰場狀態時戰場物件 +1 = 2／3（0x4144AB → 0x40BE38）
+            0x49 -> if (f != null) mem.setU8(BattleTests.BATTLE + 1, 2)
+            0x0E -> if (f != null) mem.setU8(BattleTests.BATTLE + 1, 3)
             0x1C, 0x1D, 0x1E, 0x24, 0x23, 0x72, 0x08, 0x20, 0x5D, 0x56, 0x57, 0x1B,
             0x09, 0x50, 0x5A, 0x64, 0x65, 0x66, 0x5B, 0x5C, 0x21 -> {}
             else -> return false

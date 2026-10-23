@@ -24,5 +24,7 @@ tasks.test {
     environment("LC_ALL", "C.UTF-8")
     // 有遊戲檔時跑整合測試：./gradlew :core:test -Pgame=<遊戲目錄>
     project.findProperty("game")?.let { systemProperty("ccz.game", it) }
+    // 很慢的測試（全部關卡跑回合流程，約 5 分鐘）：再加 -Pslow
+    project.findProperty("slow")?.let { systemProperty("ccz.slow", it) }
     testLogging { events("passed", "failed", "skipped"); showStandardStreams = true }
 }

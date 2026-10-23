@@ -623,6 +623,18 @@ class BattleField(
         mem.setU8(u + 0x0D, mem.u8(u + 0x0D) and 0x80.inv())
     }
 
+    /**
+     * 0x44EEE5 回合用完：格 0–59 裡第一個武將 0（曹操）的單位撤退（0x441744(0, 0)，不看狀態）；
+     * 都沒有而且格 0 在地圖上時，格 0 撤退。
+     */
+    fun timeUp() {
+        val s = (0 until 0x3C).firstOrNull { mem.u32(unit(it)) == 0L }
+        when {
+            s != null -> removeFromMap(s, false)
+            mem.u8(unit(0) + 0x0C) == 2 -> removeFromMap(0, false)
+        }
+    }
+
     /** 0x441744 的狀態部分（動畫不做）。 */
     private fun removeFromMap(slot: Int, vanish: Boolean) {
         val u = unit(slot)

@@ -40,9 +40,8 @@ class Battle(val data: GameData, val tables: ClassTables, val map: HexzMap, val 
         return path
     }
 
-    /** 我軍全部行動完，或玩家按結束回合：重設（原型還沒有敵軍行動）。 */
-    fun endTurn() {
+    /** 我軍階段開始：清除「已行動」（回合數由 TurnFlow 管）。 */
+    fun startPlayerPhase() {
         views.forEach { it.moved = false }
-        field.mem.setU8(BattleTests.BATTLE + 2, turn)   // 0x44EEE5：+2 加 1
     }
 }

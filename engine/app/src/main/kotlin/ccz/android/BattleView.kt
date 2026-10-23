@@ -1,6 +1,7 @@
 package ccz.android
 
 import android.animation.ValueAnimator
+import android.app.Activity
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -30,6 +31,7 @@ import ccz.data.HexzMap
 import ccz.data.HexzMap.Companion.TILE
 import ccz.io.GameFiles
 import ccz.script.ScriptEvent
+import java.util.concurrent.Executors
 
 /**
  * 戰場畫面。先執行戰場劇本的開戰處理（對話、選擇、劇本移動武將），跑完後進入操作：
@@ -65,6 +67,8 @@ class BattleView(
     /** 劇本目前要顯示的事件；null 表示開戰處理跑完、可以操作。 */
     private var event: ScriptEvent? = null
     private var scripting = true
+    /** 戰鬥結束（或出錯）：再點一下回到選單。 */
+    private var finished = false
 
     private var selected: BattleUnit? = null
     private var range: Movement.Range? = null
@@ -90,7 +94,7 @@ class BattleView(
         }
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
-            if (walking != null) return true
+            if (walking != null || busy) return true
             if (scripting) tapScript(e.x, e.y) else tapBattle(e.x, e.y)
             return true
         }
@@ -103,33 +107,87 @@ class BattleView(
 
     // ---------- 劇本 ----------
 
-    /** 往下執行劇本，直到需要畫面處理的事件。 */
+    /** 劇本在背景執行緒跑（事件檢查可能要一點時間），結果回到主執行緒處理。 */
+    private val worker = Executors.newSingleThreadExecutor()
+    /** 背景正在執行劇本／回合流程，不接受操作。 */
+    private var busy = false
+
+    /** 往下執行劇本與回合流程，直到需要畫面處理的事件。 */
     private fun advance() {
-        while (true) {
-            val e = session.next()
-            ensureMap()
-            if (e == null) {
+        busy = true
+        worker.execute {
+            val r = runCatching {
+                var e = session.next()
+                if (e == null && session.flow == null && session.battle != null) {
+                    session.startTurns()    // 開戰處理跑完，進入回合（原版 0x44EEE5）
+                    e = session.next()
+                }
+                e
+            }
+            post {
+                busy = false
+                r.onSuccess { handle(it) }.onFailure { e ->
+                    event = ScriptEvent.Message("劇本執行錯誤：${e.message}", 0)
+                    scripting = true
+                    finished = true
+                    invalidate()
+                }
+            }
+        }
+    }
+
+    private fun handle(e: ScriptEvent?) {
+        ensureMap()
+        val b = battle
+        when (e) {
+            null -> {
+                // 戰場事件播完回到操作；單位剛移動完（沒有事件）時保留它的資料
+                if (scripting && session.playerPhase && b != null) info = listOf("第 ${b.turn} 回合　我軍行動中")
                 scripting = false
                 event = null
-                info = listOf(Game.tw(data.stageNames.getOrElse(session.stage) { "" }) + "　戰鬥開始！點選武將查看資料與移動範圍")
                 invalidate()
-                return
             }
-            if (e is ScriptEvent.Moved) {
-                val u = battle?.unitOf(e.character)
-                if (u != null && mapImage != null) {
-                    animateWalk(u, straightPath(e.fromX, e.fromY, e.toX, e.toY)) { advance() }
-                    return
-                }
-                continue
+            is ScriptEvent.Moved -> {
+                val u = b?.unitOf(e.character)
+                if (u != null && mapImage != null) animateWalk(u, straightPath(e.fromX, e.fromY, e.toX, e.toY)) { advance() }
+                else advance()
             }
-            event = e
-            invalidate()
-            return
+            is ScriptEvent.TurnStart -> {
+                scripting = true
+                event = ScriptEvent.Message("第 ${e.turn} 回合　" + (if (e.side == 0) "我軍" else "敵軍") + "階段", 0)
+                invalidate()
+                val shown = event
+                postDelayed({ if (event === shown && !busy) advance() }, BANNER_MS)
+            }
+            ScriptEvent.PlayerPhase -> {
+                b?.startPlayerPhase()
+                select(null)
+                scripting = false
+                event = null
+                info = listOf(Game.tw(data.stageNames.getOrElse(session.stage) { "" }) + "　第 ${b?.turn ?: 1} 回合：我軍行動，點選武將移動，完成後按「結束回合」")
+                invalidate()
+            }
+            is ScriptEvent.BattleEnd -> {
+                scripting = true
+                finished = true
+                event = ScriptEvent.Message(when (e.result) {
+                    2 -> "戰鬥結束（勝利）"
+                    3 -> "戰鬥失敗"
+                    else -> "戰鬥結束"
+                } + "\n點一下回到選單", 0)
+                invalidate()
+            }
+            else -> {
+                scripting = true
+                event = e
+                invalidate()
+            }
         }
     }
 
     private fun tapScript(x: Float, y: Float) {
+        if (busy) return
+        if (finished) { (context as? Activity)?.finish(); return }
         when (val e = event) {
             is ScriptEvent.Choice, is ScriptEvent.YesNo -> {
                 val i = optionRects.indexOfFirst { it.contains(x, y) }
@@ -172,10 +230,10 @@ class BattleView(
             return
         }
         if (endTurnRect.contains(sx, sy)) {
-            b.endTurn()
+            if (!session.playerPhase || busy) return
             select(null)
-            info = listOf("第 ${b.turn} 回合")
-            invalidate()
+            session.endPlayerPhase()
+            advance()
             return
         }
         camera.invert(inverse)
@@ -193,6 +251,8 @@ class BattleView(
             animateWalk(sel, path) {
                 selected = null
                 info = UnitInfo.unit(data, b.tables, b.map, sel, null)
+                session.afterAction()    // 原版 0x4065D9：單位行動後檢查戰場事件
+                advance()
             }
             return
         }
@@ -339,7 +399,7 @@ class BattleView(
             }
             is ScriptEvent.Choice -> drawOptions(canvas, e.options.map { Game.tw(it) }, lineH)
             is ScriptEvent.YesNo -> drawOptions(canvas, listOf("是", "否"), lineH)
-            is ScriptEvent.Moved -> {}
+            else -> {}
         }
     }
 
@@ -430,6 +490,8 @@ class BattleView(
 
     companion object {
         private const val MS_PER_TILE = 140L
+        /** 回合提示自動消失的時間。 */
+        private const val BANNER_MS = 1200L
         private const val FACE = 180f
         private const val TRANSPARENT = 0xF700FF
         private val SIDE_COLORS = mapOf(

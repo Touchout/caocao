@@ -119,10 +119,13 @@ class BattleTests(private val bf: BattleField, private val results: IntArray, pr
     /** 0x26 武将进入指定区域测试（0x40F397 → 0x45B597）：範圍內任一格符合。 */
     private fun inArea(who: Int, x0: Int, y0: Int, x1: Int, y1: Int): Boolean {
         if (who == 0xFFFF) return false
+        // 地圖外的格子一定不符合，只掃地圖內（原版 y1 = 255 時 byte 迴圈不會結束，這裡不模擬）
+        val xe = minOf(x1 and 0xff, bf.width - 1)
+        val ye = minOf(y1 and 0xff, bf.height - 1)
         var y = y0 and 0xff
-        while (y <= (y1 and 0xff)) {
+        while (y <= ye) {
             var x = x0 and 0xff
-            while (x <= (x1 and 0xff)) {
+            while (x <= xe) {
                 if (matchAt(who, x, y) >= 0) return true
                 x++
             }

@@ -49,20 +49,17 @@ fun main(args: Array<String>) {
     }
     val battle = session.battle!!
     val map = battle.map
-    val setup = battle
     val mapImage = ImageIO.read(files.find(HexzMap.imagePath(map.id)))
     val units = battle.units.filter { !it.hidden }
     val focus = args.getOrNull(3)?.toInt()?.let { id -> units.firstOrNull { it.character == id } }
 
-    val infoLines = focus?.let { UnitInfo.unit(data, battle.tables, map, it, battle.aiOf[it]) }
+    val infoLines = focus?.let { UnitInfo.unit(data, battle.tables, map, it, battle.aiOf[it.character]) }
         ?: listOf(Zh.toTraditional(data.stageNames.getOrElse(stage) { "" }))
     val panel = 40 + infoLines.size * 30
     val img = BufferedImage(mapImage.width, mapImage.height + panel, BufferedImage.TYPE_INT_RGB)
     val g = img.createGraphics()
     g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
     g.drawImage(mapImage, 0, 0, null)
-    g.color = Color(60, 140, 255, 70)
-    for (s in setup.playerSlots) g.fillRect(s.x * TILE, s.y * TILE, TILE, TILE)
 
     focus?.let { u ->
         val r = battle.range(u)
@@ -126,7 +123,7 @@ fun main(args: Array<String>) {
     infoLines.forEachIndexed { i, line -> g.drawString(line, 16, mapImage.height + 34 + i * 30) }
     g.dispose()
     ImageIO.write(img, "png", File(args[2]))
-    println("S_%03d 地圖 %d：%d 名武將、%d 個我軍出場格、%d 句對話 → %s".format(stage, map.id, units.size, setup.playerSlots.size, dialogues.size, args[2]))
+    println("S_%03d 地圖 %d：%d 名武將、%d 名我軍、%d 句對話 → %s".format(stage, map.id, units.size, units.count { it.side == Side.PLAYER }, dialogues.size, args[2]))
     dialogues.take(8).forEach { println("  $it") }
     focus?.let { println("${data.characters[it.character].name} @(${it.x},${it.y}) 可到 ${battle.range(it).tiles().size} 格") }
 }

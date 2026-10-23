@@ -205,7 +205,7 @@ class BattleView(
         val b = battle ?: return
         selected = u
         range = u?.takeIf { !(it.side == Side.PLAYER && it.moved) }?.let { b.range(it) }
-        if (u != null) info = UnitInfo.unit(data, b.tables, b.map, u, b.aiOf[u])
+        if (u != null) info = UnitInfo.unit(data, b.tables, b.map, u, b.aiOf[u.character])
     }
 
     private fun animateWalk(unit: BattleUnit, path: List<Pair<Int, Int>>, done: () -> Unit) {

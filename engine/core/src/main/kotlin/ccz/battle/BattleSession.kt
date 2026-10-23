@@ -35,8 +35,8 @@ class BattleSession(
     /** 0x27 背景显示（戰場）執行後才知道地圖，之前的配置先暫存。 */
     var battle: Battle? = null
         private set
-    /** 開戰初始化（0x44D2CA）的地形與佔位表。 */
-    var init: BattleInit? = null
+    /** 戰場狀態（單位表、地形、佔位表；0x27 開戰時建立）。 */
+    var field: BattleField? = null
         private set
     private val early = ArrayList<(Battle) -> Unit>()
     private val events = ArrayList<ScriptEvent>()
@@ -68,10 +68,7 @@ class BattleSession(
 
     fun next(): ScriptEvent? {
         val e = vm.next()
-        if (e == null && !setupDone) {
-            setupDone = true
-            battle?.fillPlayers()
-        }
+        if (e == null && !setupDone) setupDone = true
         return e
     }
 
@@ -84,6 +81,7 @@ class BattleSession(
 
     override fun exec(ins: Instr, vm: ScriptVM): Boolean {
         val p = ins.params
+        val f = field
         when (ins.op) {
             // 背景显示：模式 3 = 戰場，0x15 = 地圖編號 + 變數4051 × 100
             0x27 -> if (ins.param(0x2D)?.value == 3 && battle == null) {
@@ -92,29 +90,29 @@ class BattleSession(
                 val id = (raw + mem.intVar(4051) * 100).toInt() and 0xffff
                 mem.setU16(MAP_ID, id.toLong())   // 0x413D13：寫地圖編號，變數 4051 用過歸 0
                 mem.setIntVar(4051, 0)
-                val b = Battle(data, tables, HexzMap.load(files, id))
-                battle = b
+                val map = HexzMap.load(files, id)
                 // 原版：0x27 讓遊戲進入戰場狀態，劇本暫停，執行開戰初始化 0x44D2CA 後才繼續
-                init = BattleInit(mem, HexzMap.load(files, id), rawCharacters) { vm.gaps.merge(it, 1, Int::plus) }.also { it.run() }
+                val nf = BattleField(mem, map, rawCharacters) { vm.gaps.merge(it, 1, Int::plus) }
+                nf.init()
+                field = nf
+                val b = Battle(data, tables, map, nf)
+                battle = b
                 early.forEach { it(b) }
                 early.clear()
             }
             0x46, 0x47 -> {
                 val enemy = ins.op == 0x47
                 if (!Deployment.place(mem, ins, enemy, rawCharacters)) vm.gaps.merge("出戰名單是空的（原版除以零）", 1, Int::plus)
-                placements(ins, if (enemy) 12 else 11, if (enemy) Side.ENEMY else Side.ALLY).forEach { pl -> onBattle { it.add(pl) } }
+                placements(ins, if (enemy) 12 else 11, if (enemy) Side.ENEMY else Side.ALLY).forEach { pl -> onBattle { it.aiOf[pl.character] = pl.ai } }
             }
             0x44 -> Deployment.battleInit(mem)
             0x48 -> Deployment.equip(mem, p[0].value, listOf(p[1].value, p[3].value, p[5].value), listOf(p[2].value, p[4].value))
             0x4B -> {
                 val ints = p.filter { it.type == 0x04 }
                 Deployment.placePlayer(mem, ints[0].value, ints[1].value, ints[2].value, ins.param(0x2B)!!.value, ins.param(0x26)?.value ?: 0xFFFF)
-                val slot = PlayerSlot(ints[0].value, ints[1].value, ints[2].value, ins.param(0x2B)!!.value)
-                onBattle { b -> b.playerSlots.removeAll { it.index == slot.index }; b.playerSlots += slot }
             }
             // 0x4A 我军出场强制设定：原版在這裡開出陣選擇畫面（0x418597），選完寫出戰名單
-            0x4A -> { Deployment.forceSortie(mem, ins, sortie); p.filter { it.type == 0x38 && it.value < 0xEFFF }.map { it.value }
-                .forEach { c -> onBattle { b -> if (c !in b.forcedPlayers) b.forcedPlayers += c } } }
+            0x4A -> Deployment.forceSortie(mem, ins, sortie)
             0x75 -> { val c = p[0].value; val img = p[1].value; onBattle { it.imageOverrides[c] = img } }
             // 0x52 兵种改变（0x414BD4）：寫兵種；不能用的裝備換成自動配裝（0x414B93）；變數 4081 低位 ≠ 0 時重算能力
             0x52 -> {
@@ -124,38 +122,37 @@ class BattleSession(
                     Equipment.checkAfterClassChange(mem, c)
                     if (battle != null) vm.gaps.merge("0x52 戰場上換兵種（0x477ADC 單位更新）", 1, Int::plus)
                     if (mem.u8(EngineMemory.INT_VARS + 4L * 4081) != 0) Stats.recompute(mem, c, rawCharacters)
-                }
-                onBattle { it.classOverrides[c] = cls; it.units.filter { u -> u.character == c }.forEach { u -> u.unitClass = cls } }
+                } else if (battle != null && c <= 0x402) vm.gaps.merge("0x418CE0 武將 0x400–0x402（目前行動的單位）", 1, Int::plus)
             }
-            // 战场障碍设定：(42 編號, 43 ?, 44 地形, x, y, 26, 26)。原型直接改地形。
+            // 战场障碍设定：(42 編號, 43 ?, 44 地形, x, y, 26, 26)。原型直接改地形（原版 0x58 還沒讀）。
             0x58 -> { val t = p[2].value; val x = p[3].value; val y = p[4].value; onBattle { it.map.setTerrain(x, y, t) } }
-            // 战场转向设置（武將, 面向的武將, 方向, …）
-            0x4F -> onBattle { b ->
-                val u = b.unitOf(p[0].value) ?: return@onBattle
-                val target = b.unitOf(p[1].value)
-                u.direction = if (target != null) Direction.between(u.x, u.y, target.x, target.y)
-                else Direction.of(p[2].value).takeIf { p[2].value != 0xFFFF } ?: u.direction
+            // 战场转向设置（武將, 目標武將, 方向, 背對, ?, ?）：0x4575B8
+            0x4F -> f?.turn(p[0].value, p[1].value, p[2].value, p[3].value)
+            // 武将移动（模式, 武將, 格, x, y, 方向）：原版在戰場上走 0x4594EA → 移動執行 0x43AD3B（還沒移植），暫代：直接放到目的地
+            0x32 -> if (f != null) {
+                vm.gaps.merge("0x32 戰場上的武將移動（0x4594EA → 0x43AD3B）", 1, Int::plus)
+                val u = battle!!.unitOf(p[1].value)
+                if (u != null && !u.hidden) {
+                    val (fx, fy) = u.x to u.y
+                    f.scriptMove(u.slot, p[3].value, p[4].value, p[5].value)
+                    events += ScriptEvent.Moved(u.character, fx, fy, p[3].value, p[4].value)
+                }
             }
-            // 武将移动（模式, 武將, ?, x, y, 方向）
-            0x32 -> onBattle { b ->
-                val u = b.unitOf(p[1].value) ?: return@onBattle
-                val (fx, fy) = u.x to u.y
-                val tx = p[3].value
-                val ty = p[4].value
-                if (fx != tx || fy != ty) u.direction = Direction.between(fx, fy, tx, ty)
-                u.x = tx
-                u.y = ty
-                if (p[5].value != 0xFFFF) u.direction = Direction.of(p[5].value)
-                events += ScriptEvent.Moved(u.character, fx, fy, tx, ty)
-            }
-            // 隐藏武将出现（?, 武將, ?）
-            0x4C -> onBattle { b -> b.units.filter { it.character == p[1].value }.forEach { it.hidden = false } }
-            // 武将消失（選取方式 2C, 武將, …）：原型只處理指定單一武將
-            0x31 -> if (p[0].value == 0) onBattle { b -> b.units.removeAll { it.character == p[1].value } }
-            // 認得但原型還不處理的：战斗初始化、战场全局变量、敌方装备设定、绘图、CD音轨、音效、信息传送、菜单处理、
-            // 延时、战场动作设定、战场操作开始、武将能力设定、方针变更、状态变更、单挑动作…
+            // 隐藏武将出现（模式, 武將, 格）：0x414ADC
+            0x4C -> f?.appear(p[0].value, p[1].value, p[2].value)
+            // 武将消失（模式, 武將, x0, y0, x1, y1, 陣營）：0x413522；不在戰場時原版走 0x406640（還沒移植）
+            0x31 -> if (f != null) f.disappear(p[0].value, p[1].value, IntArray(4) { p[2 + it].value }, p[6].value)
+                else vm.gaps.merge("0x31 不在戰場時（0x406640）", 1, Int::plus)
+            // 武将方针变更：0x4146D4
+            0x4E -> f?.changeAi(IntArray(11) { p[it].value })
+            // 战场撤退（模式, 武將, x0, y0, x1, y1, 陣營, 旗標）：0x41569E
+            0x53 -> f?.retreat(p[0].value, p[1].value, IntArray(4) { p[2 + it].value }, p[6].value, p[7].value)
+            // 武将状态变更：0x415551
+            0x4D -> if (f != null) f.changeStatus(IntArray(13) { p[it].value })
+            // 認得但原型還不處理的：战场全局变量、绘图、CD音轨、音效、信息传送、菜单处理、
+            // 延时、战场动作设定、战场操作开始、方针变更、单挑动作…
             0x45, 0x1C, 0x1D, 0x1E, 0x24, 0x23, 0x72, 0x08, 0x20, 0x5D, 0x56, 0x57, 0x1B,
-            0x09, 0x50, 0x5A, 0x4E, 0x4D, 0x64, 0x65, 0x66, 0x5B, 0x5C, 0x21 -> {}
+            0x09, 0x50, 0x5A, 0x64, 0x65, 0x66, 0x5B, 0x5C, 0x21 -> {}
             else -> return false
         }
         return true
@@ -176,14 +173,6 @@ class BattleSession(
         1 -> a < b
         2 -> a == b
         else -> a != b
-    }
-
-    override fun attrWritten(character: Int, attr: Int) {
-        if (attr == ATTR_CLASS) onBattle { b ->
-            val c = attr(character, ATTR_CLASS).toInt()
-            b.classOverrides[character] = c
-            b.units.filter { it.character == character }.forEach { it.unitClass = c }
-        }
     }
 
     /** 武將屬性目前的值（0x78 的屬性編號）；單位屬性在武將不在戰場上時是 0。 */

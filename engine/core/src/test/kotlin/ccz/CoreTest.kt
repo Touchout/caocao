@@ -1,6 +1,8 @@
 package ccz
 
 import ccz.battle.Battle
+import ccz.battle.BattleSession
+import ccz.script.ScriptEvent
 import ccz.battle.BattleSetup
 import ccz.data.ClassTables
 import ccz.battle.Side
@@ -99,8 +101,9 @@ class GameFilesTest {
         val f = files ?: return
         val data = GameData(f)
         val tables = ClassTables(f)
-        val setup = BattleSetup.from(Eex.parse(f.bytes("RS/S_002.eex")))
-        val battle = Battle.fromSetup(data, tables, HexzMap.load(f, setup.mapId), setup)
+        val session = BattleSession(f, data, tables, 2)
+        while (true) { val e = session.next() ?: break; if (e is ScriptEvent.Choice || e is ScriptEvent.YesNo) session.answer(1) }
+        val battle = session.battle!!
         val players = battle.units.filter { it.side == Side.PLAYER }
         assertTrue(players.isNotEmpty())
         for (u in players) {

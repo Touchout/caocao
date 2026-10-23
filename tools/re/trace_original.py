@@ -62,6 +62,7 @@ SCREEN_STUBS = [
     (0x45218F, 0x10),   # 畫地圖格
     (0x420BAE, 0x00),   # 開執行緒載入地圖 JPG（MAP\M%03d.Jpg）
     (0x4318E5, 0x0C),   # 讀圖檔並解碼（0x40BCD2 的圖片載入）
+    (0x40690C, 0x18),   # 逐像素混色（撤退淡出等效果）
 ]
 ALLOC_BUFFERS = 0x42B88B    # 配置 9 個緩衝區物件（0x48B0C0 起，見 init_buffers）
 HEAP = 0x40000000           # 模擬器裡自己配置的區域（取代原版 new 出來的陣列）
@@ -278,7 +279,18 @@ class Original(EexEmu):
         except UcError:
             pass
         end = struct.unpack("<I", mu.mem_read(VM + 0xC, 4))[0] - SCRIPT
+        self.stall = None if ok else self.call_stack()
         return end, mu.reg_read(UC_X86_REG_EAX), ok
+
+    def call_stack(self):
+        """沒跑完時的位置：目前 eip 和堆疊上看起來像返回位址的值（call 的下一條），給除錯用。"""
+        mu = self.mu
+        esp = mu.reg_read(UC_X86_REG_ESP)
+        out = [f"{mu.reg_read(UC_X86_REG_EIP):#x}"]
+        for v in struct.unpack("<256I", mu.mem_read(esp, 1024)):
+            if 0x401000 <= v < 0x486000 and mu.mem_read(v - 5, 1)[0] == 0xE8:
+                out.append(f"{v - 5:#x}")
+        return out[:12]
 
 
 # 逐 byte 比對的記憶體區域（引擎 Trace.kt 用同一份清單）
@@ -382,6 +394,8 @@ class Driver:
             self.orig.battle_init()
         after = self.orig.snap()
         rec = {"pos": pos, "op": op, "ret": ret & 0xFFFFFFFF, "ok": ok}
+        if not ok:
+            rec["stall"] = self.orig.stall
         if battle:
             rec["battle_init"] = True
         if self.orig.events:

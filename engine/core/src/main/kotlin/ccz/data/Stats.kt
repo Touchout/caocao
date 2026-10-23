@@ -1,5 +1,6 @@
 package ccz.data
 
+import ccz.battle.Units
 import ccz.script.Attributes
 import ccz.script.EngineMemory
 
@@ -114,7 +115,7 @@ object Stats {
         }
     }
 
-    /** 0x407027：設定（有上限）。回傳 false = 目前 HP/MP（戰場單位，0x45AA37）還沒移植。 */
+    /** 0x407027：設定（有上限）。目前 HP/MP（7/8）改戰場單位（0x45AA37，[0x505F30] = 2）。 */
     fun set(mem: EngineMemory, character: Int, stat: Int, value: Long): Boolean {
         val r = rec(mem, character)
         val v16 = value and 0xffff
@@ -122,7 +123,12 @@ object Stats {
             in 0..4 -> mem.setU16(r + 0x11 + 2 * stat, if (v16 >= 9999) 9999 else v16)
             5 -> mem.setU32(r + 0x1B, if ((value and 0xffffffffL) >= 0xffff) 0xffff else value)
             6 -> mem.setU16(r + 0x1F, if (v16 >= 9999) 9999 else v16)
-            7, 8 -> return false
+            7, 8 -> {
+                mem.setU8(STAT_BUSY, 2)
+                val ok = Units.setStat(mem, character, stat, value.toInt(), 0)
+                mem.setU8(STAT_BUSY, 0)
+                return ok
+            }
             in 10..14 -> mem.setU8(r + 0x17 + stat, if ((value and 0xffffffffL) >= 100) 100 else (value and 0xff).toInt())
             15 -> {
                 val f = if (v16 >= 0xffff) 0xffff else v16
@@ -133,7 +139,10 @@ object Stats {
         return true
     }
 
-    /** 0x406ECA：增加（有上限，可以是負數）。fromZero = 從 0 開始加（只對 0–4 有效）。回傳 false = 還沒移植的路徑。 */
+    /**
+     * 0x406ECA：增加（有上限，可以是負數）。fromZero = 從 0 開始加（只對 0–4 有效）。目前 HP/MP（7/8）改戰場單位
+     * （0x45AA37，[0x505F30] = 1）。回傳 false = 還沒移植的路徑。
+     */
     fun add(mem: EngineMemory, character: Int, stat: Int, value: Int, fromZero: Boolean = false): Boolean {
         val r = rec(mem, character)
         var ok = true
@@ -144,7 +153,10 @@ object Stats {
             }
             5 -> mem.setU32(r + 0x1B, addCap(mem.u32(r + 0x1B).toInt(), value, 9999).toLong() and 0xffffffffL)
             6 -> mem.setU16(r + 0x1F, addCap(mem.u16(r + 0x1F), value, 9999).toLong() and 0xffff)
-            7, 8 -> ok = false
+            7, 8 -> {
+                mem.setU8(STAT_BUSY, 1)
+                ok = Units.setStat(mem, character, stat, value, 0)
+            }
             in 10..14 -> mem.setU8(r + 0x17 + stat, addCap(mem.u8(r + 0x17 + stat), value, 100) and 0xff)
             15 -> ok = false // 戰場上改 0x501A84 + 單位（0x477ADC）；不在戰場時什麼都不做，引擎還沒有遊戲狀態
         }
@@ -194,7 +206,8 @@ object Stats {
         return when (op) {
             0 -> set(mem, character, stat, value)
             1 -> add(mem, character, stat, value.toInt())
-            2 -> if (stat == 7 || stat == 8) false else set(mem, character, stat, satSub(get(mem, character, stat), value))
+            // 0x4036B0：7/8 取武將第一個單位的目前 HP/MP
+            2 -> set(mem, character, stat, satSub(if (stat == 7 || stat == 8) Units.currentHpMp(mem, character, stat) else get(mem, character, stat), value))
             else -> true
         }
     }

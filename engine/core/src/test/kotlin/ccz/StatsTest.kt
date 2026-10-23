@@ -1,5 +1,6 @@
 package ccz
 
+import ccz.battle.Units
 import ccz.data.Characters
 import ccz.data.NewGame
 import ccz.data.Stats
@@ -26,6 +27,7 @@ class StatsTest {
         Stats.BONUS_LOG to 0xE * Stats.BONUS_LOG_LIMIT,
         Attributes.FACES to 0x800,
         EngineMemory.INT_VARS to 0x4000,
+        Units.UNITS to Units.SIZE * Units.SLOTS,
     )
     /** 劇本 VM 物件（讀參數會動串流位置），不比。 */
     private val vmObject = 0x492F90L until 0x492FC8L
@@ -45,7 +47,10 @@ class StatsTest {
         for (k in 0 until ops.length()) {
             val o = ops.getJSONObject(k)
             val want = HashMap<Long, Int>()
-            o.getJSONArray("writes").forEach { w -> (w as JSONArray).let { if (it.getLong(0) !in vmObject) want[it.getLong(0)] = it.getInt(1) } }
+            // 只比遊戲狀態區域（畫面物件，例如狀態視窗 0x4B80E8，不比）
+            o.getJSONArray("writes").forEach { w ->
+                (w as JSONArray).let { if (it.getLong(0) !in vmObject && regions.any { (a, n) -> it.getLong(0) in a until a + n }) want[it.getLong(0)] = it.getInt(1) }
+            }
             if (o.getString("kind") == "78") mem.setU32(mem.intVarAddr(o.getInt("var")), o.getLong("value"))
             val before = regions.map { (a, n) -> mem.bytes(a, n) }
             val ch = o.getInt("char")

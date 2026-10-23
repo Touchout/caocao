@@ -1,6 +1,7 @@
 """方法 1：能力值（0x38 武将能力设定、0x78 寫能力、基礎值公式 0x408A60）跟原版比對的資料。
 
-在模擬器跑原版載入函式後，先隨機改一些武將的兵種、等級、五維、我軍標識，並在成長修正表 0x507EC0 放幾筆資料
+在模擬器跑原版載入函式後，先隨機改一些武將的兵種、等級、五維、我軍標識，在戰場單位表放 40 個單位（給項目 7/8 目前 HP/MP），
+並在成長修正表 0x507EC0 放幾筆資料
 （這些初始修改記在 "init"，引擎照做），然後隨機執行：
   38    原版 0x38 處理函式（0x412007），參數 (武將, 項目, 運算, 值)
   78    原版 0x4202D8（0x78 屬性讀寫），只取能力相關屬性
@@ -54,6 +55,13 @@ def main(argv):
         poke(r + 0x2B, [rnd.randrange(80)])
         poke(r + 0x2C, [rnd.choice([1, 5, 14, 15, 16, 29, 30, 31, 45, 60, 99, rnd.randrange(256)])])
         poke(r + 0x21, [rnd.randrange(256) if rnd.random() < 0.1 else rnd.randrange(30, 101) for _ in range(5)])
+    # 戰場單位：讓 0x38 的目前 HP/MP（項目 7/8，0x45AA37）有對象。格 0–39 放 pool 裡的武將，狀態大多是 2（在地圖上）
+    for slot, c in enumerate(rnd.sample(pool, 40)):
+        u = t.UNITS + t.UNIT_SIZE * slot
+        poke(u, struct.pack("<I", c))
+        poke(u + 4, [slot])
+        poke(u + 0x0C, [rnd.choice([2, 2, 2, 1, 3])])
+        poke(u + 0x10, struct.pack("<II", rnd.randrange(1, 600), rnd.randrange(0, 300)))
     # 成長修正表：0xFF 項目 {值 u16武將}* … 0xFF 0xFF
     table = bytearray()
     for stat in range(7):

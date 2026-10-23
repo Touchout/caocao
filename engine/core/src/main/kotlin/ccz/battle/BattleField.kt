@@ -40,7 +40,7 @@ class BattleField(
         for (slot in 0 until SLOTS) {
             val u = unit(slot)
             mem.setU8(u + 0x0D, mem.u8(u + 0x0D) and 0x80.inv())   // 0x406690(0x80)
-            clearHealth(u, 0x1E)                                    // 0x423FB9(0x1E)
+            Units.clearHealth(mem, u, 0x1E)                                    // 0x423FB9(0x1E)
             if (mem.u8(u + 0x0C) == 0) continue
             // 0x43FE2C 載入單位圖（畫面，不做）
             if (slot < 60 && side(u) == 0) setAction(u, 7)           // 0x413172、0x442669(7)
@@ -70,28 +70,6 @@ class BattleField(
 
     /** 0x442669：+0x0E = 行動方式（0–7）。 */
     private fun setAction(u: Long, v: Int) { if (v in 0..7) mem.setU8(u + 0x0E, v) }
-
-    /** 0x423FB9：健康狀態（+0x1E，4 組 2 bits）裡 v 的 bit 1–4 指定的組清除。 */
-    private fun clearHealth(u: Long, v: Int) {
-        var mask = 0
-        var a = v
-        for (i in 0 until 4) {
-            a = a ushr 1
-            if (a and 1 == 0) mask = mask or mem.u8(HEALTH_MASKS + i)
-        }
-        mem.setU8(u + 0x1E, mem.u8(u + 0x1E) and mask)
-    }
-
-    /** 0x4240D6：健康狀態裡 v 的 bit 1–4 指定的組設成「有」（表 0x4240CE）。 */
-    private fun setHealth(u: Long, v: Int) {
-        var bits = 0
-        var a = v
-        for (i in 0 until 4) {
-            a = a ushr 1
-            if (a and 1 != 0) bits = bits or mem.u8(HEALTH_SET + i)
-        }
-        mem.setU8(u + 0x1E, mem.u8(u + 0x1E) or bits)
-    }
 
     private fun inArmy(c: Int) = mem.u8(Characters.addr(mem, c) + 0x2A) != 0xFF // 0x42AC58
 
@@ -438,7 +416,7 @@ class BattleField(
             u = unit(slot)
             if (mem.u16(u) == 0xFFFF) return
         } else {
-            val a = findUnit(ch) { liveUnitOf(it) }
+            val a = Units.findUnit(mem, ch) { Units.liveUnitOf(mem, it) }
             if (a < 0) return
             u = unit(a)
         }
@@ -465,33 +443,6 @@ class BattleField(
     }
 
     // ---- 劇本對單位的操作 ----
-
-    /**
-     * 0x41B882：武將參數 → 單位。≥ 0x404 = 格號 − 0x404（空格回傳 -1）；變數 [0x505EFC] ≠ 0 且 < 0xFA 時當格號；
-     * 其他回傳 0（呼叫端再用武將編號找）。
-     */
-    private fun unitParam(ch: Int): Int {
-        val slot = when {
-            ch >= 0x404 -> ch - 0x404
-            mem.u8(0x505EFCL) != 0 && (ch and 0xffff) < 0xFA -> ch
-            else -> return 0
-        }
-        if (slot !in 0 until SLOTS) { gap("0x41B882 格號超出範圍"); return -1 }
-        return if (mem.u16(unit(slot)) == 0xFFFF) -1 else slot + 1
-    }
-
-    /** 0x456079：第一個武將 = ch 而且狀態 ≠ 0 的單位格號，沒有 -1。 */
-    private fun liveUnitOf(ch: Int): Int =
-        (0 until SLOTS).firstOrNull { mem.u32(unit(it)) == (ch.toLong() and 0xffffffffL) && mem.u8(unit(it) + 0x0C) != 0 } ?: -1
-
-    /** 0x4029C2／0x43E4D6：第一個武將 = ch 的單位格號（不看狀態），沒有 -1。 */
-    private fun anyUnitOf(ch: Int): Int = (0 until SLOTS).firstOrNull { mem.u32(unit(it)) == (ch.toLong() and 0xffffffffL) } ?: -1
-
-    /** 0x41B882，找不到時用 [fallback]。回傳格號，-1 = 沒有。 */
-    private fun findUnit(ch: Int, fallback: (Int) -> Int): Int {
-        val r = unitParam(ch)
-        return if (r != 0) r - 1 else fallback(ch)
-    }
 
     /** 0x418CE0：武將參數 0x400–0x402（目前行動的單位等），還沒移植。 */
     private fun currentUnitParam(ch: Int): Boolean {
@@ -548,7 +499,7 @@ class BattleField(
      * 目標武將 0xFFFF：轉向指定方向（相同時不動）；否則轉向目標（目標也要在地圖上），背對 > 0 時再轉成相反方向。
      */
     fun turn(ch: Int, target: Int, dir: Int, back: Int) {
-        val a = findUnit(ch) { if (it < 0x400) anyUnitOf(it) else -1 }
+        val a = Units.findUnit(mem, ch) { if (it < 0x400) Units.anyUnitOf(mem, it) else -1 }
         if (a < 0 || mem.u8(unit(a) + 0x0C) != 2) return
         val u = unit(a)
         val d0 = mem.u8(u + 0x0F)
@@ -558,7 +509,7 @@ class BattleField(
             face(a, 0xFF)
             return
         }
-        val b = findUnit(target) { anyUnitOf(it) }
+        val b = Units.findUnit(mem, target) { Units.anyUnitOf(mem, it) }
         if (b < 0 || mem.u8(unit(b) + 0x0C) != 2) return
         if (direction(a, b, false, false, false) == d0) return
         face(a, b)
@@ -580,7 +531,7 @@ class BattleField(
         when (m) {
             0 -> {
                 val c = ch.toShort().toInt()   // movsx
-                val a = findUnit(c) { liveUnitOf(it) }
+                val a = Units.findUnit(mem, c) { Units.liveUnitOf(mem, it) }
                 if (a < 0 || mem.u8(unit(a) + 0x0C) == 2) return
                 var rec = if (c >= 0x404 && mem.u16(Deployment.record(c - 0x404)) == mem.u16(unit(a))) Deployment.record(c - 0x404) else 0L
                 if (rec == 0L) {
@@ -618,7 +569,7 @@ class BattleField(
     private fun removeUnits(mode: Int, ch: Int, area: IntArray, sideFilter: Int, vanish: Boolean, flag: Int) {
         if (mode == 0) {
             if (currentUnitParam(ch)) return
-            val a = findUnit(ch) { liveUnitOf(it) }
+            val a = Units.findUnit(mem, ch) { Units.liveUnitOf(mem, it) }
             if (a >= 0) remove(a, vanish, flag)
             return
         }
@@ -747,7 +698,7 @@ class BattleField(
         }
         val side = if (mode == 2 && p[7] and 0xffff == 0xFFFF) 6 else p[7]
         fun apply(kind: Int, value: Int) {
-            if (mode == 2) applyArea(p[3], p[4], p[5], p[6], side, kind, value) else setUnitStat(ch, kind, value, 0)
+            if (mode == 2) applyArea(p[3], p[4], p[5], p[6], side, kind, value) else unitStat(ch, kind, value, 0)
         }
         if (p[8] and 0xffff != 0xFFFF && p[9] and 0xffff != 0xFFFF) apply(p[8], when (p[9]) { 2 -> 6; 1 -> 3; else -> p[9] })
         if (p[10] and 0xffff != 0xFFFF) apply(6, p[10])
@@ -763,7 +714,7 @@ class BattleField(
             while (x <= x1.toByte().toInt()) {
                 val o = occupantAt((x and 0xff) or ((y and 0xff) shl 8))
                 if (o != 0xFF && mem.u8(unit(o) + 0x0C) == 2 && matchSide(side, sideCategory(o))) {
-                    setUnitStat(mem.u32(unit(o)).toInt(), kind, value, o)
+                    unitStat(mem.u32(unit(o)).toInt(), kind, value, o)
                 }
                 x++
             }
@@ -771,42 +722,8 @@ class BattleField(
         }
     }
 
-    /**
-     * 0x45AA37(武將, 項目, 值, 動畫, 格)：改戰場單位的狀態。項目 0–5 = +0x18 起的能力／移動狀態；6 = 健康狀態
-     * （值 bit 0x80 → 清除，否則設定）；7/8 = 目前 HP/MP，依 [0x505F30]：0 減少（最少 1）、1 增加、其他設定，再限制在上限內。
-     */
-    fun setUnitStat(ch: Int, kind: Int, value: Int, slotParam: Int): Boolean {
-        val slot: Int
-        if (slotParam != 0) {
-            if (mem.u16(unit(slotParam)) == 0xFFFF) return true
-            slot = slotParam
-        } else {
-            val r = unitParam(ch)
-            slot = when {
-                r < 0 -> return true
-                r > 0 -> r - 1
-                ch > 0x400 -> return true
-                else -> anyUnitOf(ch).takeIf { it >= 0 } ?: return true
-            }
-        }
-        val u = unit(slot)
-        if (mem.u8(u + 0x0C) != 2) return true
-        val c = mem.u32(u).toInt()
-        when (kind and 0xff) {
-            in 0..5 -> mem.setU8(u + 0x18 + (kind and 0xff), value)
-            6 -> if (value and 0x80 != 0) clearHealth(u, value) else setHealth(u, value)
-            7 -> mem.setU32(u + 0x10, minOf(hpOp(mem.u32(u + 0x10), value.toLong() and 0xffffffffL), Equipment.maxHp(mem, c)))
-            8 -> mem.setU32(u + 0x14, minOf(hpOp(mem.u16(u + 0x14).toLong(), value.toLong() and 0xffff), Equipment.maxMp(mem, c)))
-            else -> { gap("0x45AA37 項目 ${kind and 0xff}"); return false }
-        }
-        return true
-    }
-
-    /** 0x40DA4A：依 [0x505F30] 0 減少（最少 1）、1 增加、其他 = 設定。 */
-    private fun hpOp(cur: Long, v: Long): Long = when (mem.u32(Stats.STAT_BUSY)) {
-        0L -> if (cur > v) cur - v else 1
-        1L -> (cur + v) and 0xffffffffL
-        else -> v
+    private fun unitStat(ch: Int, kind: Int, value: Int, slot: Int) {
+        if (!Units.setStat(mem, ch, kind, value, slot)) gap("0x45AA37 項目 ${kind and 0xff}")
     }
 
     companion object {
@@ -823,9 +740,5 @@ class BattleField(
         private const val DIRECTIONS = 0x435A3EL
         /** AI 0–7 → 行動方式（0x48E379）。 */
         private const val AI_ACTIONS = 0x48E379L
-        /** 健康狀態 4 組設定的值（0x4240CE）。 */
-        private const val HEALTH_SET = 0x4240CEL
-        /** 健康狀態 4 組的遮罩（0x4240D2）。 */
-        private const val HEALTH_MASKS = 0x4240D2L
     }
 }

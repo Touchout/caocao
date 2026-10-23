@@ -164,7 +164,8 @@ class BattleView(
                 select(null)
                 scripting = false
                 event = null
-                info = listOf(Game.tw(data.stageNames.getOrElse(session.stage) { "" }) + "　第 ${b?.turn ?: 1} 回合：我軍行動，點選武將移動，完成後按「結束回合」")
+                info = listOf(Game.tw(data.stageNames.getOrElse(session.stage) { "" }) + "　第 ${b?.turn ?: 1} 回合：我軍行動",
+                    "點選武將移動，完成後按「結束回合」")
                 invalidate()
             }
             is ScriptEvent.BattleEnd -> {
@@ -294,13 +295,19 @@ class BattleView(
 
     // ---------- 繪製 ----------
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) = fitHeight()
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        // 直向螢幕比較窄，字跟著縮，一行對話才放得下
+        val size = minOf(40f, minOf(w, h) / 27f)
+        text.textSize = size
+        nameText.textSize = size
+        fitHeight()
+    }
 
-    /** 一開始讓整張地圖塞進畫面高度。 */
+    /** 一開始讓地圖塞進畫面：橫向對齊高度（左右可以拖），直向對齊寬度（上下可以拖）。 */
     private fun fitHeight() {
         val img = mapImage ?: return
         if (height == 0) return
-        val s = height.toFloat() / img.height
+        val s = if (width >= height) height.toFloat() / img.height else width.toFloat() / img.width
         camera.setScale(s, s)
     }
 

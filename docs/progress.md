@@ -38,6 +38,9 @@
 
 ## 進行中：v0.5 回合流程與戰場事件
 
+- [x] 暫時的出陣畫面（App `BattleActivity`）：進戰場前從武將 0–101 勾選，上限 = 這關的我軍出場格數，強制出場的與曹操預設勾選；
+  選到的武將暫時當成已入隊（`BattleSession(testArmy = true)` 把我軍標識設 0）。v0.7 劇情串接後換成正式的。
+
 0. [x] 方法 2 的軌跡比對工具，S_000、S_002 scene 0 完全一致（細節見 `docs/script.md`「軌跡比對」、`docs/methodology.md`）。
    做完的：開新遊戲記憶體（`NewGame`）、武將屬性 0x78（`Attributes`）、能力值與 0x38（`Stats`）、讀參數的變數參照
    （`ScriptVM.decode`）、出場配置表／出戰名單／敵軍等級／0x44/0x48/0x4A/0x4B/0x52（`Deployment`、`Stats.recompute`）。

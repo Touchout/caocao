@@ -29,6 +29,11 @@ class BattleSession(
     val mem: EngineMemory = EngineMemory(files.bytes("Ekd5.exe")),
     /** 出陣（玩家輸入）：開新遊戲時當成「上一場的出戰名單」，出陣選擇畫面也回傳這些。原型預設只派曹操。 */
     val sortie: List<Int> = listOf(0),
+    /**
+     * 測試用（暫時的出陣畫面）：出陣的武將先當成已經入隊（我軍標識 = 0）。正式版要跑城內劇本（0x3B 武将加入），
+     * 見 docs/progress.md 路線圖 v0.7。
+     */
+    val testArmy: Boolean = false,
 ) : ScriptHost {
     val vm = ScriptVM(files.bytes("RS/S_%03d.eex".format(stage)), mem, this)
 
@@ -61,6 +66,7 @@ class BattleSession(
         // 開新遊戲：原版載入資料後的記憶體（傳入的記憶體已經有了就沿用，例如接續上一關）
         if (mem.u32(Characters.PTR) != Characters.ARRAY) {
             NewGame.init(mem, files)
+            if (testArmy) sortie.forEach { mem.setU8(Characters.addr(mem, it) + 0x2A, 0) }
             Deployment.setRoster(mem, sortie)
         }
         vm.start(0)

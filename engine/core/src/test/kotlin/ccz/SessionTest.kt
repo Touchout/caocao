@@ -46,6 +46,16 @@ class SessionTest {
         println("不認得的指令：" + s.vm.unknown.entries.sortedByDescending { it.value }.joinToString { "%02x×%d".format(it.key, it.value) })
     }
 
+    /** 暫時的出陣畫面：出陣的武將當成已入隊，S_001（汜水關）照出場格放上地圖。 */
+    @Test
+    fun testArmySortie() {
+        val f = files ?: return
+        val s = BattleSession(f, GameData(f), ClassTables(f), 1, sortie = listOf(0, 1, 6, 10), testArmy = true)
+        runAll(s)
+        val players = assertNotNull(s.battle).units.filter { it.side == Side.PLAYER && !it.hidden }.map { it.character }.sorted()
+        assertEquals(listOf(0, 1, 6, 10), players)
+    }
+
     @Test
     fun allStagesRunSetup() {
         val f = files ?: return

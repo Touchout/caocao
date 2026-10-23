@@ -103,6 +103,8 @@
 - EEX 每個 opcode 的參數型別表是用 Unicorn 模擬 exe 量出來的（`tools/re/eexemu.py`），結果在 `tools/eex_signatures.json`，
   引擎用的是 `engine/core/src/main/resources/ccz/eex/signatures.txt`。
 - 簡轉繁用 OpenCC s2twp 字典（Apache 2.0），放在 core resources。
+- APK 用 repo 裡固定的 debug 簽章（`engine/app/debug.keystore`，密碼 android）。雲端 VM 每次產生新的 debug 金鑰，
+  簽章不同的新版不能覆蓋安裝；v0.4.2 起固定，之前裝的版本要先解除安裝一次（2026-10-23）。
 - Maven Central 常回 429：Gradle 先走 Google 的 Maven Central 鏡像。VM 沒有 KVM，不能跑 Android 模擬器，
   用 `engine/desktop` 把畫面畫成 PNG 驗證。
 

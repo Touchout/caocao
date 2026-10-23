@@ -50,9 +50,10 @@ python3 "$ROOT/tools/export_all.py" "$GAME" "$ROOT/out" >/dev/null
 python3 "$ROOT/tools/hexzmap.py" "$GAME" "$ROOT/out" >/dev/null
 python3 "$ROOT/tools/eex.py" "$GAME/Ekd5.exe" -o "$ROOT/out/eex" "$GAME"/RS/[RS]_*.eex
 
-echo "== 方法 1 標準答案（out/expected_memory.bin、attr_vectors.json、stats_vectors.json）"
+echo "== 方法 1 標準答案（out/expected_memory.bin、attr_vectors.json、stats_vectors.json、hpmp_vectors.json）"
 python3 "$ROOT/tools/re/dump_memory.py" "$GAME" "$ROOT/out/expected_memory.bin" >/dev/null
 python3 "$ROOT/tools/re/gen_attr_vectors.py" "$GAME" "$ROOT/out/attr_vectors.json" >/dev/null
 python3 "$ROOT/tools/re/gen_stats_vectors.py" "$GAME" "$ROOT/out/stats_vectors.json" >/dev/null
+python3 "$ROOT/tools/re/gen_hpmp_vectors.py" "$GAME" "$ROOT/out/hpmp_vectors.json" >/dev/null
 
 echo "== 完成。建置：cd engine && ./gradlew :core:test :app:assembleDebug -Pgame=$GAME"

@@ -17,12 +17,30 @@ import java.io.File
  * 每條指令一行 JSON：pos、op、ret（條件結果 1/0）、display（彈出的文字）、guide（歷史情報）、writes（變數／旗標變化）。
  * 選擇題一律答 1。
  * 用法：./gradlew :desktop:trace --args="<遊戲目錄> <關卡編號> <輸出.jsonl> [出陣武將，逗號分隔，預設 0]"
+ *       關卡編號寫 all 時跑全部戰場劇本，輸出到 <輸出目錄>/engine_NNN.jsonl（給 tools/re/sweep_compare.py）。
  */
 fun main(args: Array<String>) {
     val files = GameFiles(File(args[0]))
-    val stage = args[1].toInt()
     val sortie = args.getOrNull(3)?.split(",")?.map { it.trim().toInt() } ?: listOf(0)
-    val session = BattleSession(files, GameData(files), ClassTables(files), stage, sortie = sortie)
+    val data = GameData(files)
+    val tables = ClassTables(files)
+    if (args[1] == "all") {
+        File(args[2]).mkdirs()
+        for (name in files.list("RS").filter { Regex("rs/s_\\d{3}\\.eex").matches(it) }) {
+            val stage = name.substring(5, 8).toInt()
+            try {
+                traceStage(files, data, tables, stage, File(args[2], "engine_%03d.jsonl".format(stage)), sortie)
+            } catch (e: Exception) {
+                System.err.println("S_%03d 失敗：$e".format(stage))
+            }
+        }
+    } else {
+        traceStage(files, data, tables, args[1].toInt(), File(args[2]), sortie)
+    }
+}
+
+private fun traceStage(files: GameFiles, data: GameData, tables: ClassTables, stage: Int, file: File, sortie: List<Int>) {
+    val session = BattleSession(files, data, tables, stage, sortie = sortie)
     val mem = session.mem
     val out = StringBuilder()
     var before = Snapshot(mem)
@@ -52,8 +70,9 @@ fun main(args: Array<String>) {
         if (e is ScriptEvent.Choice || e is ScriptEvent.YesNo) session.answer(1)
         if (++n > 200000) break
     }
-    File(args[2]).writeText(out.toString())
-    System.err.println("${out.count { it == '\n' }} 條指令 → ${args[2]}")
+    file.writeText(out.toString())
+    System.err.println("${out.count { it == '\n' }} 條指令 → $file")
+    if (session.vm.gaps.isNotEmpty()) System.err.println("  還沒移植：" + session.vm.gaps.entries.joinToString { "${it.key} ×${it.value}" })
 }
 
 /** 逐 byte 比對的記憶體區域，同 tools/re/trace_original.py 的 MEM_REGIONS。 */

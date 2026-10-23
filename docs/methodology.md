@@ -68,10 +68,12 @@
 | 開新遊戲後整個記憶體 | `tools/re/dump_memory.py` → `out/expected_memory.bin` | `NewGameTest` |
 | 0x78 武將屬性讀寫 | `tools/re/gen_attr_vectors.py` → `out/attr_vectors.json` | `AttrTest` |
 | 能力值、0x38、基礎值公式 | `tools/re/gen_stats_vectors.py` → `out/stats_vectors.json` | `StatsTest` |
+| HP/MP 上限（含裝備加成） | `tools/re/gen_hpmp_vectors.py` → `out/hpmp_vectors.json` | `HpMpTest` |
 | 劇本執行軌跡（方法 2） | `tools/re/trace_original.py` | `:desktop:trace` + `tools/re/compare_trace.py` |
+| 全部戰場劇本的軌跡（方法 2） | 每關跑 `trace_original.py` → `out/sweep/orig_nnn.jsonl` | `:desktop:trace --args="<遊戲> all <out/sweep 絕對路徑>"` + `tools/re/sweep_compare.py [--init]` |
 
 - `out/` 的標準答案含遊戲資料衍生的數值，不進 git，由 `tools/setup_vm.sh` 產生。**檔案不存在時對應測試會印「略過」並通過**，
-  新 session 要先確認 `out/` 裡有這三個檔。
+  新 session 要先確認 `out/` 裡有這四個檔。
 - 改了模擬器（`tools/re/eexemu.py`、`trace_original.py`）之後要重新產生標準答案再跑測試。
 - 模擬器裡沒有的東西（畫面、Windows API、檔案）用攔截處理，清單在 `docs/script.md`「軌跡比對」；
   遇到指令「在模擬器裡跑不完」，先找它卡在哪個函式（看最後執行的位址），判斷是畫面就攔截、是邏輯就補初始狀態。

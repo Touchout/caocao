@@ -2,6 +2,7 @@ package ccz.battle
 
 import ccz.data.Characters
 import ccz.data.ClassTables
+import ccz.data.Equipment
 import ccz.data.GameData
 import ccz.data.HexzMap
 import ccz.data.NewGame
@@ -33,6 +34,9 @@ class BattleSession(
 
     /** 0x27 背景显示（戰場）執行後才知道地圖，之前的配置先暫存。 */
     var battle: Battle? = null
+        private set
+    /** 開戰初始化（0x44D2CA）的地形與佔位表。 */
+    var init: BattleInit? = null
         private set
     private val early = ArrayList<(Battle) -> Unit>()
     private val events = ArrayList<ScriptEvent>()
@@ -85,9 +89,13 @@ class BattleSession(
             0x27 -> if (ins.param(0x2D)?.value == 3 && battle == null) {
                 // 0xFFFF 時原版用 99 號（0x413DA8）
                 val raw = ins.param(0x15)!!.value.let { if (it == 0xFFFF) 99 else it }
-                val id = raw + (mem.intVar(4051) * 100).toInt()
+                val id = (raw + mem.intVar(4051) * 100).toInt() and 0xffff
+                mem.setU16(MAP_ID, id.toLong())   // 0x413D13：寫地圖編號，變數 4051 用過歸 0
+                mem.setIntVar(4051, 0)
                 val b = Battle(data, tables, HexzMap.load(files, id))
                 battle = b
+                // 原版：0x27 讓遊戲進入戰場狀態，劇本暫停，執行開戰初始化 0x44D2CA 後才繼續
+                init = BattleInit(mem, HexzMap.load(files, id), rawCharacters) { vm.gaps.merge(it, 1, Int::plus) }.also { it.run() }
                 early.forEach { it(b) }
                 early.clear()
             }
@@ -108,12 +116,13 @@ class BattleSession(
             0x4A -> { Deployment.forceSortie(mem, ins, sortie); p.filter { it.type == 0x38 && it.value < 0xEFFF }.map { it.value }
                 .forEach { c -> onBattle { b -> if (c !in b.forcedPlayers) b.forcedPlayers += c } } }
             0x75 -> { val c = p[0].value; val img = p[1].value; onBattle { it.imageOverrides[c] = img } }
-            // 0x52 兵种改变（0x414BD4）：寫兵種；檢查裝備還能不能用（0x414B93，還沒移植）；變數 4081 低位 ≠ 0 時重算能力
+            // 0x52 兵种改变（0x414BD4）：寫兵種；不能用的裝備換成自動配裝（0x414B93）；變數 4081 低位 ≠ 0 時重算能力
             0x52 -> {
                 val c = p[0].value; val cls = p[1].value
                 if (c < 0x400) {
                     mem.setU8(Characters.addr(mem, c) + 0x2B, cls and 0xff)
-                    vm.gaps.merge("0x52 換兵種後的裝備檢查", 1, Int::plus)
+                    Equipment.checkAfterClassChange(mem, c)
+                    if (battle != null) vm.gaps.merge("0x52 戰場上換兵種（0x477ADC 單位更新）", 1, Int::plus)
                     if (mem.u8(EngineMemory.INT_VARS + 4L * 4081) != 0) Stats.recompute(mem, c, rawCharacters)
                 }
                 onBattle { it.classOverrides[c] = cls; it.units.filter { u -> u.character == c }.forEach { u -> u.unitClass = cls } }
@@ -200,6 +209,8 @@ class BattleSession(
         }
 
     companion object {
+        /** 戰場地圖編號（0x413D13 寫入，0x44C1C2 讀）。 */
+        const val MAP_ID = 0x510CFEL
         // 型別 55 屬性編號（tools/eex_types.json）
         const val ATTR_R_IMAGE = 0
         const val ATTR_FACE = 1

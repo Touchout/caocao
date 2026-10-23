@@ -30,6 +30,18 @@ class BattleField(
     val height get() = mem.u8(MAP_HEIGHT)
 
     fun init() {
+        // 0x44D2CA 開頭：戰場物件 0x4B3D08 的勝敗 +1、回合 +2 = 0，回合上限 +3 = VM +0x3D0E，天氣 +4／+0x11 取 0x496E21，行動方 +0x10 = 0
+        val b = BattleTests.BATTLE
+        mem.setU8(b + 5, 0)
+        mem.setU16(b + 1, 0)
+        mem.setU32(b + 8, 0)
+        mem.setU32(b + 0x0C, 0)
+        mem.setU8(b + 0x10, 0)
+        mem.setU32(b + 0x4FC, 0)
+        mem.setU32(b + 0x500, 0)
+        mem.setU8(b + 0x11, mem.u8(0x496E21L))
+        mem.setU8(b + 4, mem.u8(0x496E22L))
+        mem.setU8(b + 3, mem.u8(0x492F90L + 0x3D0E))
         // 0x435A8D：250 格全部重設
         for (slot in 0 until SLOTS) resetUnit(slot)
         // 0x44C1C2：載入地圖（寬、高寫 0x4B422C／D，地形抄進緩衝區 = [map]）
@@ -193,15 +205,27 @@ class BattleField(
     /**
      * 0x32 武将移动 在戰場上的暫代版（推測）：原版 0x4594EA 用移動執行 0x43AD3B 沿路走過去（還沒移植），
      * 這裡直接放到目的地，朝向 = 指定的方向（0–3），沒指定時取移動方向；左右翻轉跟著朝向（東 = 翻轉）。
+     * 原版確定的部分：已經在目的地或目的地在地圖外就什麼都不做（回傳 false）；移動執行一開始先設成目前行動的單位（0x406240）。
      */
-    fun scriptMove(slot: Int, x: Int, y: Int, dir: Int) {
+    fun scriptMove(slot: Int, x: Int, y: Int, dir: Int): Boolean {
         val u = unit(slot)
         val fx = mem.u8(u + 6)
         val fy = mem.u8(u + 7)
+        if ((fx == x && fy == y) || x >= width || y >= height) return false
+        setCurrent(slot)
         if (fx != x || fy != y) mem.setU8(u + 0x0F, Direction.between(fx, fy, x, y).ordinal)
         moveOnGrid(slot, x, y)
         if (dir in 0..3) mem.setU8(u + 0x0F, dir)
         setFlip(u, mem.u8(u + 0x0F) == 1)
+        return true
+    }
+
+    /** 0x406240：設成目前行動的單位：+0x24 清 bit 0x80，[0x4B5DF0] = 武將，[0x500AC0] = 單位位址。 */
+    fun setCurrent(slot: Int) {
+        val u = unit(slot)
+        mem.setU8(u + 0x24, mem.u8(u + 0x24) and 0x7F)
+        mem.setU32(CURRENT_CHAR, mem.u32(u))
+        mem.setU32(CURRENT_UNIT_PTR, u)
     }
 
     private fun moveOnGrid(slot: Int, x: Int, y: Int) {
@@ -732,6 +756,9 @@ class BattleField(
         const val SLOTS = 250
         const val MAP_WIDTH = 0x4B422CL
         const val MAP_HEIGHT = 0x4B422DL
+        /** 目前行動的單位：武將（0x4B5DF0）、單位位址（0x500AC0），0x406240 設定。 */
+        const val CURRENT_CHAR = 0x4B5DF0L
+        const val CURRENT_UNIT_PTR = 0x500AC0L
         /** 地圖矩形限制（0x4362E6）。 */
         const val RECT = 0x501BF0L
         /** 戰場迷霧模式（≥ 2 時放置單位會更新視野，0x42A297）。 */

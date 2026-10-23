@@ -66,6 +66,8 @@ SCREEN_STUBS = [
     (0x41381B, 0x00),   # 地圖 JPG 解碼成畫面（0x407D08 載入地圖之後）
 ]
 ALLOC_BUFFERS = 0x42B88B    # 配置 9 個緩衝區物件（0x48B0C0 起，見 init_buffers）
+VM_VTABLE = 0x486610        # 劇本 VM 的虛擬函式表
+VM_RESULT_SIZES = 0x4865F0  # 劇本 VM 結果欄位的大小表（8 格）
 HEAP = 0x40000000           # 模擬器裡自己配置的區域（取代原版 new 出來的陣列）
 TABLE_VA = 0x410A38         # 指令跳轉表，索引 = opcode − 2
 
@@ -114,6 +116,7 @@ class Original(EexEmu):
         mu.mem_write(CHARS_PTR, struct.pack("<I", chars))
         mu.mem_write(ITEMS2_PTR, struct.pack("<I", items2))
         self.init_buffers()
+        self.init_vm()
         self.mu.hook_add(UC_HOOK_CODE, self._on_load_entry, begin=LOAD_ENTRY, end=LOAD_ENTRY)
         self.star = open(os.path.join(os.path.dirname(data_e5_path), "Star.e5"), "rb").read()
         self.mu.hook_add(UC_HOOK_CODE, self._on_load_star, begin=LOAD_STAR, end=LOAD_STAR)
@@ -150,6 +153,19 @@ class Original(EexEmu):
             raise RuntimeError(f"開戰初始化出錯 {e}，呼叫鏈 {self.call_stack()}") from e
         if mu.reg_read(UC_X86_REG_EIP) != RET_MAGIC:
             raise RuntimeError(f"開戰初始化沒有跑完，呼叫鏈 {self.call_stack()}")
+
+    def init_vm(self):
+        """劇本 VM 物件 0x492F90 的虛擬函式表（0x486610）和結果欄位（VM+0x18 個數、+0x1C 指標陣列；原版載入劇本時
+        0x417E84 → 0x40FD4C 用 new 配置，大小表 0x4865F0 = 4,4,8,0xC,4,4,4,0）。欄位 5 = 勝利、6 = 敗北（0x42/0x43）。
+        模擬器沒跑建構函式和 new，放在 HEAP + 0x3F0000，內容 0。"""
+        mu = self.mu
+        mu.mem_write(VM, struct.pack("<I", VM_VTABLE))
+        table = HEAP + 0x3F0000
+        sizes = struct.unpack("<8I", mu.mem_read(VM_RESULT_SIZES, 32))
+        ptrs = [table + 0x100 + 0x10 * i for i in range(len(sizes))]
+        mu.mem_write(table, struct.pack("<8I", *ptrs) + b"\0" * 0x180)
+        mu.mem_write(VM + 0x18, struct.pack("<II", len(sizes), table))
+        self.vm_results = ptrs
 
     def init_buffers(self):
         """原版啟動時配置 9 個緩衝區物件（0x42B88B：0x48B0C0 + 0x10·i，大小表 0x42B908，GlobalAlloc）。

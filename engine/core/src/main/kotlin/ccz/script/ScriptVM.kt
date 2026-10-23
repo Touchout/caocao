@@ -113,6 +113,49 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
     /** 只執行 scene 裡的某一個 section（戰場事件用）。 */
     fun startSection(scene: Int, section: Int) = begin(listOf(sections(scene)[section]))
 
+    /** 劇本執行完了（或還沒開始），可以檢查戰場事件。 */
+    val idle: Boolean get() = finished && pending.isEmpty()
+
+    /**
+     * 選戰場事件（原版 0x4100A1）：scene 的每個 section 依序執行開頭的指令（名稱、條件…）直到 opcode 0，
+     * 條件全部成立的記下來；回傳**最後一個**成立的 section 與它的 opcode 0 位置，沒有回傳 null。
+     * 條件指令照常執行（有副作用的也會做），所以每次檢查都會跑過所有 section 的條件。
+     */
+    fun selectEvent(scene: Int): Pair<Int, Int>? {
+        var last: Pair<Int, Int>? = null
+        sections(scene).forEachIndexed { i, r ->
+            var p = r.first
+            var ok = true
+            while (p <= r.last) {
+                val op = u16(p)
+                if (op == 0) break
+                if (op == 1) { gaps.merge("戰場事件的條件裡有子事件（opcode 1）", 1, Int::plus); ok = false; break }
+                val (ins, after) = decode(p)
+                if (isTest(op)) {
+                    val t = traced(ins, true) { evalTest(ins) }
+                    if (t == null) { gaps.merge("戰場事件的條件要問玩家（0x04）", 1, Int::plus); ok = false } else ok = ok && t
+                } else {
+                    traced(ins, false) { exec(ins); true }
+                }
+                p = after
+            }
+            if (ok && p <= r.last) last = i to p
+        }
+        return last
+    }
+
+    /** 從 [selectEvent] 選到的 section 的 opcode 0 開始執行它的本體（條件已經檢查過）。 */
+    fun startEvent(scene: Int, event: Pair<Int, Int>) {
+        val s = sections(scene)[event.first]
+        sectionsLeft.clear()
+        pending.clear()
+        answer = null
+        finished = false
+        frames.clear()
+        frames += Frame(s.first, s.last + 1)
+        pc = event.second
+    }
+
     private fun begin(list: List<IntRange>) {
         sectionsLeft.clear()
         sectionsLeft.addAll(list)

@@ -17,7 +17,8 @@ class Battle(val data: GameData, val tables: ClassTables, val map: HexzMap, val 
     /** 0x75 S特殊形象指定：武將 → 形象編號 */
     val imageOverrides = HashMap<Int, Int>()
     val movement = Movement(map, tables)
-    var turn = 1
+    /** 第幾回合（從 1 起）：原版存在戰場物件 0x4B3D08 +2（從 0 起）。 */
+    val turn: Int get() = this.field.mem.u8(BattleTests.BATTLE + 2) + 1
 
     fun unitOf(character: Int): BattleUnit? = units.firstOrNull { it.character == character }
 
@@ -42,6 +43,6 @@ class Battle(val data: GameData, val tables: ClassTables, val map: HexzMap, val 
     /** 我軍全部行動完，或玩家按結束回合：重設（原型還沒有敵軍行動）。 */
     fun endTurn() {
         views.forEach { it.moved = false }
-        turn++
+        field.mem.setU8(BattleTests.BATTLE + 2, turn)   // 0x44EEE5：+2 加 1
     }
 }

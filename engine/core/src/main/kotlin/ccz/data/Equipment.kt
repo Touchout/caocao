@@ -82,7 +82,7 @@ object Equipment {
     }
 
     /** 0x4200F5：特效數值 +0x16 依特效 +0x14 與等級調整。 */
-    private fun effectValue(mem: EngineMemory, id: Int, level: Int): Long {
+    fun effectValue(mem: EngineMemory, id: Int, level: Int): Long {
         var x = mem.u8(item(id) + 0x16).toLong()
         val e = mem.u8(item(id) + 0x14)
         val lv = level and 0xff

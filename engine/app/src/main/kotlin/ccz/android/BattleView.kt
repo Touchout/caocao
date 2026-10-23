@@ -441,14 +441,23 @@ class BattleView(
     /** 右上角的按鈕，right 是右邊界。 */
     private fun button(canvas: Canvas, r: RectF, label: String, right: Float, lineH: Float) {
         val w = text.measureText(label) + 48f
-        r.set(right - w, 24f, right, 24f + lineH + 24f)
+        val top = topInset() + 24f
+        r.set(right - w, top, right, top + lineH + 24f)
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(200, 40, 40, 60)
         canvas.drawRoundRect(r, 16f, 16f, paint)
         canvas.drawText(label, r.left + 24f, r.bottom - 30f, text)
     }
 
-    private fun linesPerPage() = maxOf(1, ((height - 160f) / (text.textSize * 1.3f)).toInt())
+    /** 狀態列（含瀏海）的高度：按鈕要放在它下面才按得到。 */
+    @Suppress("DEPRECATION")
+    private fun topInset(): Float {
+        val insets = rootWindowInsets ?: return 0f
+        val cut = if (android.os.Build.VERSION.SDK_INT >= 28) insets.displayCutout?.safeInsetTop ?: 0 else 0
+        return maxOf(insets.systemWindowInsetTop, insets.stableInsetTop, cut).toFloat()
+    }
+
+    private fun linesPerPage() = maxOf(1, ((height - 160f - topInset()) / (text.textSize * 1.3f)).toInt())
 
     /** 歷史情報（劇本用 0x16 寫進來的攻略），點一下換頁，最後一頁再點關閉。 */
     private fun drawGuide(canvas: Canvas, page: Int) {
@@ -457,9 +466,9 @@ class BattleView(
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(235, 10, 10, 30)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-        canvas.drawText("歷史情報　（${page + 1} / ${(lines.size + per - 1) / per}）點一下繼續", 48f, 72f, nameText)
+        canvas.drawText("歷史情報　（${page + 1} / ${(lines.size + per - 1) / per}）點一下繼續", 48f, topInset() + 72f, nameText)
         lines.drop(page * per).take(per).forEachIndexed { i, l ->
-            canvas.drawText(l, 48f, 140f + text.textSize * 1.3f * i, text)
+            canvas.drawText(l, 48f, topInset() + 140f + text.textSize * 1.3f * i, text)
         }
     }
 

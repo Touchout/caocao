@@ -25,6 +25,8 @@ class BattleField(
 ) {
     /** 佔位表（緩衝區 8 + 0xC80）：每格上的單位格號，0xFF = 沒有。 */
     val occupant = ByteArray(0x640) { 0xFF.toByte() }
+    /** 特效判定（0x4101D9）。 */
+    val effects by lazy { Effects(this) }
 
     val width get() = mem.u8(MAP_WIDTH)
     val height get() = mem.u8(MAP_HEIGHT)
@@ -239,14 +241,14 @@ class BattleField(
     // ---- 位置 ----
 
     /** 0x4359F5：往方向 d（0 北、1 東、2 南、3 西）的鄰格；超出地圖時 x = 0xFF。 */
-    private fun neighbor(p: Int, d: Int): Int {
+    fun neighbor(p: Int, d: Int): Int {
         val x = ((p and 0xff) + mem.u8(DIRECTIONS + 2 * d)) and 0xff
         val y = (((p shr 8) and 0xff) + mem.u8(DIRECTIONS + 2 * d + 1)) and 0xff
         return if (x >= width || y >= height) 0xFF or (y shl 8) else x or (y shl 8)
     }
 
     /** 0x435884：格上的單位格號（< 0xFA），沒有或地圖外是 0xFF。 */
-    private fun occupantAt(p: Int): Int {
+    fun occupantAt(p: Int): Int {
         val x = p and 0xff
         val y = (p shr 8) and 0xff
         if (x >= width || y >= height) return 0xFF
@@ -273,8 +275,8 @@ class BattleField(
         val t = terrainAt(x, y)
         val cost = mem.u8(NewGame.TERRAIN + 60L * group + 0x1E + t)  // 0x41B7D2、0x4060C4
         if (cost != 0xFF) return cost
-        if (mem.u8(0x500AD3L) == 1) return 1                  // 0x403A6F
-        gap("0x403A6F 特效 54 穿越移動（0x4101D9）")
+        // 0x403A6F：特效 54 穿越移動（[0x500AD3] = 1 時一律成立）
+        if (mem.u8(0x500AD3L) == 1 || effects.value(unit(slot), 0x36, 0x5D, 1, 1) != 0L) return 1
         return 0xFF
     }
 
@@ -285,7 +287,7 @@ class BattleField(
     }
 
     /** 0x4362E6：地圖矩形限制 [0x501BF0]（x, y, 寬, 高；0 = 不限制）。 */
-    private fun insideRect(p: Int): Boolean {
+    fun insideRect(p: Int): Boolean {
         val r = mem.u32(RECT)
         if (r == 0L) return true
         val x = p and 0xff

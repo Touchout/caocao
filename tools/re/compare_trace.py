@@ -19,7 +19,10 @@ def norm_writes(r):
 def texts(r):
     out = []
     for d in r.get("display", []):
-        out.append(d["display"] if isinstance(d, dict) else d)
+        if not isinstance(d, dict):
+            out.append(d)
+        elif "display" in d:  # 其他事件（choice、battle_start）不是文字
+            out.append(d["display"])
     return out
 
 

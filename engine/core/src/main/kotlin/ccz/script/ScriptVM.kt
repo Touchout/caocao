@@ -176,7 +176,7 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                         head.op == 0x12 -> {
                             val a = answer ?: return choice(head)
                             answer = null
-                            selection = a
+                            traced(head, false) { selection = a; true }
                             true
                         }
                         isTest(head.op) -> {
@@ -206,7 +206,7 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                     if (op == 0x12) {
                         val a = answer ?: return choice(ins)
                         answer = null
-                        selection = a
+                        traced(ins, false) { selection = a; true }
                         pc = after
                         continue
                     }

@@ -27,3 +27,11 @@ application {
 tasks.named<JavaExec>("run") {
     environment("LC_ALL", "C.UTF-8")
 }
+
+// 引擎端的劇本執行軌跡（docs/methodology.md 方法 2）
+tasks.register<JavaExec>("trace") {
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("ccz.desktop.TraceKt")
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dsun.jnu.encoding=UTF-8")
+    environment("LC_ALL", "C.UTF-8")
+}

@@ -29,6 +29,16 @@ data class GuideEntry(val mode: Int, val text: String) {
     val body: String get() = text.dropWhile { it.isDigit() }
 }
 
+/** 軌跡比對（docs/methodology.md 方法 2）：每執行一條指令回報一筆。 */
+data class TraceRecord(
+    val pos: Int,
+    val op: Int,
+    /** 條件指令的結果；不是條件指令時為 null。 */
+    val test: Boolean?,
+    val events: List<ScriptEvent>,
+    val guide: List<GuideEntry>,
+)
+
 /** 劇本裡跟戰場／城內狀態有關的指令由宿主處理。 */
 interface ScriptHost {
     /** 有副作用的指令（配置、地圖、形象…）。回傳 false 表示不認得（VM 會記錄下來）。 */
@@ -72,6 +82,9 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
     /** 0x19 胜利条件 設定的文字。 */
     var victoryText = ""
         private set
+
+    /** 設定後每執行一條指令就回報（軌跡比對用）。 */
+    var trace: ((TraceRecord) -> Unit)? = null
 
     /** 不認得的指令（opcode → 次數），除錯用。 */
     val unknown = HashMap<Int, Int>()
@@ -163,10 +176,10 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                             true
                         }
                         isTest(head.op) -> {
-                            val r = evalTest(head) ?: return askFor(head)
+                            val r = traced(head, true) { evalTest(head) } ?: return askFor(head)
                             r
                         }
-                        else -> { exec(head); true }
+                        else -> { traced(head, false) { exec(head); true }; true }
                     }
                     val len = u16(after)
                     val body = after + 2
@@ -181,7 +194,7 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                 else -> {
                     val (ins, after) = Eex.decode(data, pc)
                     if (isTest(op)) {
-                        val r = evalTest(ins) ?: return askFor(ins)
+                        val r = traced(ins, true) { evalTest(ins) } ?: return askFor(ins)
                         top.cond = top.cond && r
                         pc = after
                         continue
@@ -197,12 +210,22 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                     when (op) {
                         0x0C -> { frames.clear(); if (!nextSection()) return null }
                         0x0D -> { finished = true; return null }
-                        0x76 -> jump(after, ins.params[0].value)
-                        else -> exec(ins)
+                        0x76 -> traced(ins, false) { jump(after, ins.params[0].value); true }
+                        else -> traced(ins, false) { exec(ins); true }
                     }
                 }
             }
         }
+    }
+
+    /** 執行一條指令並回報軌跡。block 回傳 null 表示要先問玩家，這時不回報。 */
+    private inline fun traced(ins: Instr, isTest: Boolean, block: () -> Boolean?): Boolean? {
+        val t = trace ?: return block()
+        val p0 = pending.size
+        val g0 = guide.size
+        val r = block() ?: return null
+        t(TraceRecord(ins.pos, ins.op, if (isTest) r else null, pending.drop(p0), guide.drop(g0)))
+        return r
     }
 
     private fun askFor(ins: Instr): ScriptEvent =
@@ -250,10 +273,13 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
             0x15 -> dialogue(p[0].value, p[2].text!!)
             0x63 -> dialogue(null, p[1].text!!)
             // 信息：變數 4071 = 0 時彈出訊息；否則寫進「歷史情報」（4071 是格式，0xFF 清空），不顯示
-            0x16 -> when (val mode = mem.intVar(4071)) {
-                0L -> pending += ScriptEvent.Message(p[0].text!!, ins.op)
-                0xFFL -> guide.clear()
-                else -> guide += GuideEntry(mode.toInt(), p[0].text!!)
+            0x16 -> {
+                when (val mode = mem.intVar(4071)) {
+                    0L -> pending += ScriptEvent.Message(p[0].text!!, ins.op)
+                    0xFFL -> guide.clear()
+                    else -> guide += GuideEntry(mode.toInt(), p[0].text!!)
+                }
+                mem.setIntVar(4071, 0) // 原版執行完一律重設（0x413ADF）
             }
             0x17, 0x69 -> pending += ScriptEvent.Message(p.last().text!!, ins.op)
             0x67 -> pending += ScriptEvent.Message(p[1].text!!, ins.op)

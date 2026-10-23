@@ -9,6 +9,8 @@ package ccz.script
  */
 class EngineMemory(exe: ByteArray) {
     private val image: ByteArray
+    /** 原版用 new 配置的陣列（武將執行期資料等），放在固定的 HEAP 區，位址同 tools/re/trace_original.py。 */
+    private val heap = ByteArray(HEAP_SIZE)
     private val extra = HashMap<Long, Byte>()
 
     init {
@@ -31,13 +33,21 @@ class EngineMemory(exe: ByteArray) {
 
     fun u8(addr: Long): Int {
         val o = addr - BASE
-        return if (o in 0 until image.size) image[o.toInt()].toInt() and 0xff else (extra[addr]?.toInt() ?: 0) and 0xff
+        if (o in 0 until image.size) return image[o.toInt()].toInt() and 0xff
+        val h = addr - HEAP
+        if (h in 0 until HEAP_SIZE) return heap[h.toInt()].toInt() and 0xff
+        return (extra[addr]?.toInt() ?: 0) and 0xff
     }
 
     fun setU8(addr: Long, v: Int) {
         val o = addr - BASE
-        if (o in 0 until image.size) image[o.toInt()] = v.toByte() else extra[addr] = v.toByte()
+        if (o in 0 until image.size) { image[o.toInt()] = v.toByte(); return }
+        val h = addr - HEAP
+        if (h in 0 until HEAP_SIZE) { heap[h.toInt()] = v.toByte(); return }
+        extra[addr] = v.toByte()
     }
+
+    fun bytes(addr: Long, n: Int) = ByteArray(n) { u8(addr + it).toByte() }
 
     fun u16(addr: Long) = u8(addr) or (u8(addr + 1) shl 8)
     fun u32(addr: Long): Long = (u16(addr).toLong() or (u16(addr + 2).toLong() shl 16))
@@ -70,6 +80,8 @@ class EngineMemory(exe: ByteArray) {
 
     companion object {
         const val BASE = 0x400000L
+        const val HEAP = 0x40000000L
+        const val HEAP_SIZE = 0x400000
         const val INT_VARS = 0x502000L
         const val PTR_VARS = 0x506000L
         /** 劇本 VM 物件（0x492F90）+0x38，共 0x2000 bytes = 65536 個旗標。 */

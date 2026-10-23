@@ -12,12 +12,15 @@
 - 跨 Session 的進度記在 `docs/progress.md`。
 
 ## 新 session 開始時
-1. 讀 `docs/progress.md`（目前狀態、路線圖、進行中的步驟、決策紀錄），需要細節再看 `docs/formats.md`、`docs/battle.md`。
+1. 讀 `docs/progress.md`（目前狀態、路線圖、進行中的步驟、決策紀錄）和 `docs/methodology.md`（怎麼確認跟原版一樣），
+   需要細節再看 `docs/formats.md`、`docs/battle.md`、`docs/script.md`。
 2. 跑 `tools/setup_vm.sh` 重建環境：下載解壓遊戲檔、Python 套件、angr venv、Android SDK、產生 `out/`。
    遊戲檔來自使用者的 Google Drive（`tools/fetch_game.sh`），檔案要開「知道連結的人都能檢視」，下載不到就請使用者打開分享。
 3. 從 `docs/progress.md` 的「進行中」接著做。
 
 ## 工作慣例
+- **不推測原版行為**：先在 exe 找到對應函式、讀懂、寫進文件，再實作，並用 `docs/methodology.md` 的比對方法確認跟原版一致。
+  真的找不到才推測，而且要標明。
 - 每完成一個步驟：更新 `docs/progress.md`（勾選、寫下發現與決策），commit 並 push。不要累積到最後才寫。
 - 新發現的格式寫進 `docs/formats.md`，戰鬥／引擎邏輯寫進 `docs/battle.md`，位址用 VA（image base 0x400000）。
 - 每版 App 出 APK（`out/caocao-<版本>-debug.apk`）傳給使用者實機測試。

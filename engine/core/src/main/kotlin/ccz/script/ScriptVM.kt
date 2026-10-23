@@ -1,5 +1,7 @@
 package ccz.script
 
+import ccz.data.Stats
+
 /** 劇本執行時需要畫面處理的事件。 */
 sealed interface ScriptEvent {
     /** 對話：speaker 是武將編號（找不到時為 null，只有名字）。 */
@@ -168,7 +170,7 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                     }
                 }
                 1 -> {
-                    val (head, after) = Eex.decode(data, pc + 2)
+                    val (head, after) = decode(pc + 2)
                     val c = when {
                         head.op == 0x03 -> !top.lastSub
                         head.op == 0x12 -> {
@@ -194,7 +196,7 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
                     }
                 }
                 else -> {
-                    val (ins, after) = Eex.decode(data, pc)
+                    val (ins, after) = decode(pc)
                     if (isTest(op)) {
                         val r = traced(ins, true) { evalTest(ins) } ?: return askFor(ins)
                         top.cond = top.cond && r
@@ -256,6 +258,27 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
         }
     }
 
+    /**
+     * 解碼一條指令，參數照原版讀參數函式（0x4183F7）換成實際的值：
+     * - 型別 04（i32）是負數、而且 opcode < 0x6E：整數變數 −值。
+     * - 武將型別（02、38、39）在 0xEFFF..0xFFFE：整數變數 0xFFFE − 值（0xFFFF 是「無」，不換）。
+     */
+    private fun decode(at: Int): Pair<Instr, Int> {
+        val (ins, after) = Eex.decode(data, at)
+        if (ins.params.none { needsVar(ins.op, it) }) return ins to after
+        val params = ins.params.map { p ->
+            if (!needsVar(ins.op, p)) p
+            else Param(p.type, mem.intVar(if (p.type == 4) -p.value else 0xFFFE - p.value).toInt(), p.text)
+        }
+        return Instr(ins.pos, ins.op, params) to after
+    }
+
+    private fun needsVar(op: Int, p: Param) = when (p.type) {
+        4 -> p.value < 0 && op < 0x6E
+        0x02, 0x38, 0x39 -> p.value in 0xEFFF..0xFFFE
+        else -> false
+    }
+
     private fun exec(ins: Instr) {
         val p = ins.params
         when (ins.op) {
@@ -266,6 +289,7 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
             }
             0x0B -> mem.setFlag(p[0].value, p[1].value != 0)
             0x77 -> VarOps.assign(mem, p[0].value, p[1].value.toLong() and MASK, p[2].value, p[3].value, p[4].value.toLong() and MASK)
+            0x38 -> if (!Stats.op38(mem, p[0].value, p[1].value, p[2].value, p[3].value.toLong() and MASK)) gaps.merge("0x38 戰場單位", 1, Int::plus)
             0x78 -> {
                 val (v, mode, ch, attr) = p.take(4).map { it.value }
                 if (!Attributes.execute(mem, attr, ch, mode, v)) gaps.merge("0x78 升級", 1, Int::plus)

@@ -62,7 +62,7 @@ class GameData(files: GameFiles) {
             val at = (NewGame.STAR_ITEMS - NewGame.ITEMS).toInt()
             star.copyInto(its, at, 0, minOf(star.size, NewGame.STAR_MAX, its.size - at))
         }
-        items = (0 until NewGame.ITEM_COUNT).map { n -> Item(n, cString(its, n * 25, 15)) }
+        items = (0 until NewGame.ITEM_COUNT).map { n -> Item(n, cString(its, n * 25, 15).trimEnd()) } // Star.e5 的名稱後面帶 \r\n
 
         val exe = files.bytes("Ekd5.exe")
         fun table(off: Int, size: Int, stride: Int) = (0 until size / stride).map { cString(exe, off + it * stride, stride) }

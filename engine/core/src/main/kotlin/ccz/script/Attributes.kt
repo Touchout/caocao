@@ -1,6 +1,7 @@
 package ccz.script
 
 import ccz.data.Characters
+import ccz.data.Stats
 
 /**
  * 0x78 整型变量赋值：整數變數 ↔ 武將屬性（原版 0x4202D8；屬性 → 位置的對照在 0x415418）。
@@ -89,6 +90,11 @@ object Attributes {
                 mem.setU8(a, (v and 0xff).toInt())
             }
             2 -> {
+                // 能力 0x11..0x1F（攻擊～士氣、HP、MP）：先記能力修正紀錄（0x408B52，視為「設定」）
+                if (s.kind == Kind.CHARACTER && s.offset in 0x11..0x1F) {
+                    val stat = (s.offset - 0x11) / 2
+                    Stats.logBonus(mem, character, v, 0, if (stat >= 7) stat - 1 else stat)
+                }
                 if (s.kind == Kind.CHARACTER && s.offset == 4) mem.setU16(FACES + 2L * character, v and 0xffff)
                 mem.setU16(a, v and 0xffff)
             }

@@ -27,6 +27,8 @@ class BattleField(
     val occupant = ByteArray(0x640) { 0xFF.toByte() }
     /** 特效判定（0x4101D9）。 */
     val effects by lazy { Effects(this) }
+    /** 移動力、移動花費、移動範圍（0x43F74F、0x43F7B8、0x438484）。 */
+    val search by lazy { Search(this, gap) }
 
     val width get() = mem.u8(MAP_WIDTH)
     val height get() = mem.u8(MAP_HEIGHT)

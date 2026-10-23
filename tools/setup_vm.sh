@@ -5,6 +5,7 @@
 #   3. angr 反編譯器（獨立 venv ~/venv-re，系統 setuptools 裝不起來）
 #   4. Android SDK（~/android-sdk）與 engine/local.properties
 #   5. 產生 out/ 的匯出結果（封包、Data、EEX 反組譯、地形）
+#   6. 產生方法 1 的標準答案（模擬器跑原版，含遊戲資料所以不進 git；沒有的話對應測試會略過）
 # 用法：tools/setup_vm.sh [google_drive_file_id] [密碼]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -48,5 +49,10 @@ echo "== 匯出 out/"
 python3 "$ROOT/tools/export_all.py" "$GAME" "$ROOT/out" >/dev/null
 python3 "$ROOT/tools/hexzmap.py" "$GAME" "$ROOT/out" >/dev/null
 python3 "$ROOT/tools/eex.py" "$GAME/Ekd5.exe" -o "$ROOT/out/eex" "$GAME"/RS/[RS]_*.eex
+
+echo "== 方法 1 標準答案（out/expected_memory.bin、attr_vectors.json、stats_vectors.json）"
+python3 "$ROOT/tools/re/dump_memory.py" "$GAME" "$ROOT/out/expected_memory.bin" >/dev/null
+python3 "$ROOT/tools/re/gen_attr_vectors.py" "$GAME" "$ROOT/out/attr_vectors.json" >/dev/null
+python3 "$ROOT/tools/re/gen_stats_vectors.py" "$GAME" "$ROOT/out/stats_vectors.json" >/dev/null
 
 echo "== 完成。建置：cd engine && ./gradlew :core:test :app:assembleDebug -Pgame=$GAME"

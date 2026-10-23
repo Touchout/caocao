@@ -60,9 +60,27 @@
 
 使用者在電腦上玩原版，在指定時間點存檔或截圖；引擎讀存檔比對狀態。
 
+## 目前的比對工具一覽
+
+| 比對對象 | 產生標準答案（模擬器跑原版） | 引擎端測試／工具 |
+|---|---|---|
+| 變數指令 0x77/0x79/0x05/0x0B | `tools/re/gen_vectors.py`（只含數字，進 repo） | `VarOpsTest` |
+| 開新遊戲後整個記憶體 | `tools/re/dump_memory.py` → `out/expected_memory.bin` | `NewGameTest` |
+| 0x78 武將屬性讀寫 | `tools/re/gen_attr_vectors.py` → `out/attr_vectors.json` | `AttrTest` |
+| 能力值、0x38、基礎值公式 | `tools/re/gen_stats_vectors.py` → `out/stats_vectors.json` | `StatsTest` |
+| 劇本執行軌跡（方法 2） | `tools/re/trace_original.py` | `:desktop:trace` + `tools/re/compare_trace.py` |
+
+- `out/` 的標準答案含遊戲資料衍生的數值，不進 git，由 `tools/setup_vm.sh` 產生。**檔案不存在時對應測試會印「略過」並通過**，
+  新 session 要先確認 `out/` 裡有這三個檔。
+- 改了模擬器（`tools/re/eexemu.py`、`trace_original.py`）之後要重新產生標準答案再跑測試。
+- 模擬器裡沒有的東西（畫面、Windows API、檔案）用攔截處理，清單在 `docs/script.md`「軌跡比對」；
+  遇到指令「在模擬器裡跑不完」，先找它卡在哪個函式（看最後執行的位址），判斷是畫面就攔截、是邏輯就補初始狀態。
+- 玩家輸入（選擇題、出陣）兩邊給一樣的：選擇題一律第一個，出陣預設只派曹操。
+
 ## 每個 session 的檢查清單
 
 - [ ] 新實作的公式有方法 1 的比對測試嗎？
 - [ ] 新支援的劇本指令有用方法 2 對照過原版嗎？
 - [ ] 有推測的地方都標明了，並列在 `docs/progress.md` 的待確認清單嗎？
-- [ ] `./gradlew :core:test -Pgame=/home/user/caocao/game/ccz66` 全部通過？
+- [ ] `./gradlew :core:test -Pgame=/home/user/caocao/game/ccz66` 全部通過，而且輸出裡沒有「略過」？
+- [ ] S_000、S_002 scene 0 的軌跡比對還是完全一致（指令見 `docs/script.md`「軌跡比對」）？

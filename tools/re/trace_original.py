@@ -30,12 +30,17 @@ INT_VARS = 0x502000
 PTR_VARS = 0x506000
 GUIDE = 0x509000
 GUIDE_LEN = 0x508994
-DISPLAY = 0x42D5B0          # 顯示訊息／對話框（stdcall，3 個參數：文字, ?, 樣式）
+DISPLAY = 0x42D5B0          # 顯示訊息／對話框（stdcall，3 個參數：文字, 說話者, 樣式）
+BATTLE_TALK = 0x45965D      # 戰場上的對話（stdcall，2 個參數：文字, 說話者）；0x14 在戰場模式且說話者確定時用這個
 LOAD_ENTRY = 0x41B533       # 讀 Data.e5 某一項到緩衝區（stdcall：檔名, 項目, 目的位址），成功回傳 1
 LOAD_ALL_DATA = 0x41B639    # 載入全部 Data.e5（武將、道具、兵種、地形、第 2 項、策略）
 CHARS_PTR = 0x4CEA00        # 武將執行期資料陣列的指標（1024 × 0x48）
 ITEMS2_PTR = 0x4CEA04       # Data.e5 第 2 項載入後的陣列指標（127 × 0x28）
 LOAD_BUF_PTR = 0x496F60     # 讀檔用的緩衝區指標
+UNITS = 0x4A7B20            # 戰場單位表（250 × 0x30，[0] = 武將編號，空格 0xFFFF）
+UNIT_SIZE = 0x30
+UNIT_SLOTS = 250
+TEMP_BUF = 0x48B100         # 暫存緩衝區物件
 HEAP = 0x40000000           # 模擬器裡自己配置的區域（取代原版 new 出來的陣列）
 TABLE_VA = 0x410A38         # 指令跳轉表，索引 = opcode − 2
 
@@ -65,6 +70,7 @@ class Original(EexEmu):
         self.load_script(script)
         self.events = []
         self.mu.hook_add(UC_HOOK_CODE, self._on_display, begin=DISPLAY, end=DISPLAY)
+        self.mu.hook_add(UC_HOOK_CODE, self._on_battle_talk, begin=BATTLE_TALK, end=BATTLE_TALK)
 
     def init_game_data(self, data_e5_path):
         """照原版開新遊戲時的方式載入 Data.e5：陣列放在 HEAP，攔截讀檔函式直接給資料，再執行原版的載入函式。"""
@@ -76,8 +82,15 @@ class Original(EexEmu):
         mu.mem_write(LOAD_BUF_PTR, struct.pack("<I", buf))
         mu.mem_write(CHARS_PTR, struct.pack("<I", chars))
         mu.mem_write(ITEMS2_PTR, struct.pack("<I", items2))
+        # 暫存緩衝區物件（0x40159C 取得）：[0] 型別 1 = 記憶體、+4 大小、+0xC 起點。原版啟動時建立，這裡直接給一塊
+        mu.mem_write(TEMP_BUF, struct.pack("<BxxxII", 1, 0x100000, 0) + struct.pack("<I", HEAP + 0x300000))
         self.mu.hook_add(UC_HOOK_CODE, self._on_load_entry, begin=LOAD_ENTRY, end=LOAD_ENTRY)
         return self.call(LOAD_ALL_DATA)
+
+    def init_statics(self):
+        """程式啟動時的靜態建構：戰場單位表 250 格的 [0] = 0xFFFF（0x408E69 → 建構函式 0x4012AF）。"""
+        for slot in range(UNIT_SLOTS):
+            self.mu.mem_write(UNITS + UNIT_SIZE * slot, struct.pack("<I", 0xFFFF))
 
     def _on_load_entry(self, mu, addr, size, user):
         esp = mu.reg_read(UC_X86_REG_ESP)
@@ -115,6 +128,14 @@ class Original(EexEmu):
         self.events.append({"display": self.cstr(text), "arg2": a2 if a2 < 0x80000000 else a2 - (1 << 32), "style": a3})
         mu.reg_write(UC_X86_REG_EAX, 0)
         mu.reg_write(UC_X86_REG_ESP, esp + 4 + 12)
+        mu.reg_write(UC_X86_REG_EIP, ret)
+
+    def _on_battle_talk(self, mu, addr, size, user):
+        esp = mu.reg_read(UC_X86_REG_ESP)
+        ret, text, speaker = struct.unpack("<III", mu.mem_read(esp, 12))
+        self.events.append({"display": self.cstr(text), "arg2": speaker, "battle": True})
+        mu.reg_write(UC_X86_REG_EAX, 0)
+        mu.reg_write(UC_X86_REG_ESP, esp + 4 + 8)
         mu.reg_write(UC_X86_REG_EIP, ret)
 
     def cstr(self, addr, limit=4096):
@@ -176,6 +197,8 @@ class Driver:
     def __init__(self, exe, script_path):
         self.data = open(script_path, "rb").read()
         self.orig = Original(exe, self.data)
+        self.orig.init_statics()
+        self.orig.init_game_data(os.path.join(os.path.dirname(exe), "Data.e5"))
         self.sigs = load_signatures()
         self.trace = []
 

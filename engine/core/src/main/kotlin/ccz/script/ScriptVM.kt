@@ -47,9 +47,8 @@ interface ScriptHost {
     /** 跟戰場狀態有關的條件（回合、行動方、單位狀態、勝敗…）。 */
     fun test(ins: Instr, vm: ScriptVM): Boolean = false
 
-    /** 0x78 整型变量赋值：讀／寫武將屬性（屬性編號見 tools/eex_types.json 型別 55）。 */
-    fun getAttr(character: Int, attr: Int): Long = 0
-    fun setAttr(character: Int, attr: Int, value: Long) {}
+    /** 0x78 整型变量赋值 寫了武將屬性之後通知宿主（屬性存在 EngineMemory，見 Attributes）。 */
+    fun attrWritten(character: Int, attr: Int) {}
 
     /** 對話裡用名字指定說話者（"&吕布"）時，換成武將編號。 */
     fun characterByName(name: String): Int? = null
@@ -88,6 +87,9 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
 
     /** 不認得的指令（opcode → 次數），除錯用。 */
     val unknown = HashMap<Int, Int>()
+
+    /** 認得但還沒移植的原版行為（說明 → 次數），除錯用。 */
+    val gaps = HashMap<String, Int>()
 
     fun u16(p: Int) = (data[p].toInt() and 0xff) or ((data[p + 1].toInt() and 0xff) shl 8)
 
@@ -265,9 +267,9 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
             0x0B -> mem.setFlag(p[0].value, p[1].value != 0)
             0x77 -> VarOps.assign(mem, p[0].value, p[1].value.toLong() and MASK, p[2].value, p[3].value, p[4].value.toLong() and MASK)
             0x78 -> {
-                val v = p[0].value
-                if (p[1].value == 0) mem.setIntVar(v, host.getAttr(p[2].value, p[3].value))
-                else host.setAttr(p[2].value, p[3].value, mem.intVar(v))
+                val (v, mode, ch, attr) = p.take(4).map { it.value }
+                if (!Attributes.execute(mem, attr, ch, mode, v)) gaps.merge("0x78 升級", 1, Int::plus)
+                else if (mode == 1) host.attrWritten(ch, attr)
             }
             0x14, 0x7A -> dialogue(null, p[0].text!!)
             0x15 -> dialogue(p[0].value, p[2].text!!)

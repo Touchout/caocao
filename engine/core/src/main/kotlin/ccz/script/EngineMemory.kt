@@ -29,6 +29,7 @@ class EngineMemory(exe: ByteArray) {
             val n = minOf(rsize, maxOf(vsize, rsize), exe.size - raw, imageSize - va)
             if (n > 0) System.arraycopy(exe, raw, image, va, n)
         }
+        Attributes.initUnits(this)
     }
 
     fun u8(addr: Long): Int {

@@ -1,9 +1,11 @@
 package ccz.battle
 
+import ccz.data.Characters
 import ccz.data.ClassTables
 import ccz.data.GameData
 import ccz.data.HexzMap
 import ccz.io.GameFiles
+import ccz.script.Attributes
 import ccz.script.EngineMemory
 import ccz.script.Instr
 import ccz.script.ScriptEvent
@@ -33,8 +35,6 @@ class BattleSession(
     var setupDone = false
         private set
 
-    /** 武將屬性（0x78 讀寫）。原型只保存劇本寫過的值，其餘取 Data.e5。 */
-    private val attrs = HashMap<Pair<Int, Int>, Long>()
 
     private val nameIndex: Map<String, Int> by lazy {
         val m = HashMap<String, Int>()
@@ -47,6 +47,8 @@ class BattleSession(
     }
 
     init {
+        // 開新遊戲：武將執行期資料（傳入的記憶體已經有了就沿用，例如接續上一關）
+        if (mem.u32(Characters.PTR) != Characters.ARRAY) Characters.init(mem, files.archive("Data.e5")[0])
         vm.start(0)
     }
 
@@ -141,28 +143,23 @@ class BattleSession(
         else -> a != b
     }
 
-    override fun getAttr(character: Int, attr: Int): Long = attrs[character to attr] ?: when (attr) {
-        ATTR_R_IMAGE -> data.characters.getOrNull(character)?.rImage?.toLong() ?: 0
-        ATTR_FACE -> data.characters.getOrNull(character)?.guessFace?.toLong() ?: 0
-        ATTR_CLASS -> (battle?.unitClass(character) ?: data.characters.getOrNull(character)?.unitClass ?: 0).toLong()
-        ATTR_LEVEL -> data.characters.getOrNull(character)?.level?.toLong() ?: 0
-        else -> 0
-    }
-
-    override fun setAttr(character: Int, attr: Int, value: Long) {
-        attrs[character to attr] = value
+    override fun attrWritten(character: Int, attr: Int) {
         if (attr == ATTR_CLASS) onBattle { b ->
-            b.classOverrides[character] = value.toInt()
-            b.units.filter { it.character == character }.forEach { it.unitClass = value.toInt() }
+            val c = attr(character, ATTR_CLASS).toInt()
+            b.classOverrides[character] = c
+            b.units.filter { it.character == character }.forEach { it.unitClass = c }
         }
     }
+
+    /** 武將屬性目前的值（0x78 的屬性編號）；單位屬性在武將不在戰場上時是 0。 */
+    fun attr(character: Int, attr: Int): Long = Attributes.get(mem, attr, character) ?: 0
 
     override fun drainEvents(): List<ScriptEvent> = events.toList().also { events.clear() }
 
     override fun characterByName(name: String): Int? = nameIndex[name] ?: nameIndex[Zh.toTraditional(name)]
 
     /** 頭像編號（劇本改過的優先）。 */
-    fun face(character: Int): Int = getAttr(character, ATTR_FACE).toInt()
+    fun face(character: Int): Int = attr(character, ATTR_FACE).toInt()
 
     /**
      * 0x46 友軍每人 11 個參數：武將, 26, x, y, 朝向, AI, 45, 07, 目標武將, 目標x, 目標y

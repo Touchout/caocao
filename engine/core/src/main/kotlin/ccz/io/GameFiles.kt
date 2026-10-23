@@ -19,6 +19,8 @@ class GameFiles(val root: File) {
 
     fun exists(path: String): Boolean = find(path) != null
 
+    fun bytesOrNull(path: String): ByteArray? = find(path)?.readBytes()
+
     fun list(dir: String): List<String> {
         val prefix = dir.trimEnd('/').lowercase() + "/"
         return index.keys.filter { it.startsWith(prefix) && '/' !in it.substring(prefix.length) }.sorted()

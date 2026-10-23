@@ -19,7 +19,7 @@ data class Character(
     val unitClass: Int,
 )
 
-/** 道具（Data.e5 第 1 項，25 bytes）。數值欄位都還是推測，先只取名稱。 */
+/** 道具（Data.e5 第 1 項 + Star.e5，各 25 bytes）。數值欄位都還是推測，先只取名稱。 */
 data class Item(val id: Int, val name: String)
 
 class GameData(files: GameFiles) {
@@ -55,8 +55,14 @@ class GameData(files: GameFiles) {
                 unitClass = u8(0x1A),
             )
         }
-        val its = data[1]
-        items = (0 until its.size / 25).map { n -> Item(n, cString(its, n * 25, 15)) }
+        // 6.6：道具 104 起在 Star.e5（原版 0x451313 讀進 0x4A0248，接在第 1 項後面），共 512 個
+        val its = ByteArray(NewGame.ITEM_COUNT * NewGame.ITEM_SIZE)
+        data[1].copyInto(its, 0, 0, minOf(data[1].size, its.size))
+        files.bytesOrNull("Star.e5")?.let { star ->
+            val at = (NewGame.STAR_ITEMS - NewGame.ITEMS).toInt()
+            star.copyInto(its, at, 0, minOf(star.size, NewGame.STAR_MAX, its.size - at))
+        }
+        items = (0 until NewGame.ITEM_COUNT).map { n -> Item(n, cString(its, n * 25, 15)) }
 
         val exe = files.bytes("Ekd5.exe")
         fun table(off: Int, size: Int, stride: Int) = (0 until size / stride).map { cString(exe, off + it * stride, stride) }

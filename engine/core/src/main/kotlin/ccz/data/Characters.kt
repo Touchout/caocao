@@ -1,5 +1,6 @@
 package ccz.data
 
+import ccz.script.Attributes
 import ccz.script.EngineMemory
 
 /**
@@ -26,6 +27,7 @@ object Characters {
             mem.setU32(r, (n or 0x1000).toLong())
             for (i in 0 until 12) mem.setU8(r + 8 + i, src(i))
             mem.setU32(r + 4, (src(0x0D) or (src(0x0E) shl 8)).toLong())
+            mem.setU16(Attributes.FACES + 2L * n, mem.u16(r + 4).toLong()) // 0x423E30 模式 0：頭像表
             mem.setU8(r + 0x26, src(0x10))
             mem.setU8(r + 0x2A, src(0x11))
             for (i in 0 until 5) {

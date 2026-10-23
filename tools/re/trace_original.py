@@ -33,6 +33,7 @@ GUIDE_LEN = 0x508994
 DISPLAY = 0x42D5B0          # 顯示訊息／對話框（stdcall，3 個參數：文字, 說話者, 樣式）
 BATTLE_TALK = 0x45965D      # 戰場上的對話（stdcall，2 個參數：文字, 說話者）；0x14 在戰場模式且說話者確定時用這個
 LOAD_ENTRY = 0x41B533       # 讀 Data.e5 某一項到緩衝區（stdcall：檔名, 項目, 目的位址），成功回傳 1
+LOAD_STAR = 0x451313        # 讀 Star.e5（6.6 的道具 104 起）
 LOAD_ALL_DATA = 0x41B639    # 載入全部 Data.e5（武將、道具、兵種、地形、第 2 項、策略）
 CHARS_PTR = 0x4CEA00        # 武將執行期資料陣列的指標（1024 × 0x48）
 ITEMS2_PTR = 0x4CEA04       # Data.e5 第 2 項載入後的陣列指標（127 × 0x28）
@@ -85,7 +86,18 @@ class Original(EexEmu):
         # 暫存緩衝區物件（0x40159C 取得）：[0] 型別 1 = 記憶體、+4 大小、+0xC 起點。原版啟動時建立，這裡直接給一塊
         mu.mem_write(TEMP_BUF, struct.pack("<BxxxII", 1, 0x100000, 0) + struct.pack("<I", HEAP + 0x300000))
         self.mu.hook_add(UC_HOOK_CODE, self._on_load_entry, begin=LOAD_ENTRY, end=LOAD_ENTRY)
+        self.star = open(os.path.join(os.path.dirname(data_e5_path), "Star.e5"), "rb").read()
+        self.mu.hook_add(UC_HOOK_CODE, self._on_load_star, begin=LOAD_STAR, end=LOAD_STAR)
         return self.call(LOAD_ALL_DATA)
+
+    def _on_load_star(self, mu, addr, size, user):
+        # 0x451313：用 Windows 檔案 API 把 Star.e5 開頭最多 0x27D8 bytes 讀到 ecx（道具 104 起）。模擬器沒有檔案 API，直接給
+        dest = mu.reg_read(UC_X86_REG_ECX)
+        mu.mem_write(dest, self.star[:0x27D8])
+        esp = mu.reg_read(UC_X86_REG_ESP)
+        ret = struct.unpack("<I", mu.mem_read(esp, 4))[0]
+        mu.reg_write(UC_X86_REG_ESP, esp + 4)
+        mu.reg_write(UC_X86_REG_EIP, ret)
 
     def init_statics(self):
         """程式啟動時的靜態建構：戰場單位表 250 格的 [0] = 0xFFFF（0x408E69 → 建構函式 0x4012AF）。"""

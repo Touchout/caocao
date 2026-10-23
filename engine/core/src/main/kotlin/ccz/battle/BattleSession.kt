@@ -4,6 +4,7 @@ import ccz.data.Characters
 import ccz.data.ClassTables
 import ccz.data.GameData
 import ccz.data.HexzMap
+import ccz.data.NewGame
 import ccz.io.GameFiles
 import ccz.script.Attributes
 import ccz.script.EngineMemory
@@ -47,8 +48,8 @@ class BattleSession(
     }
 
     init {
-        // 開新遊戲：武將執行期資料（傳入的記憶體已經有了就沿用，例如接續上一關）
-        if (mem.u32(Characters.PTR) != Characters.ARRAY) Characters.init(mem, files.archive("Data.e5")[0])
+        // 開新遊戲：原版載入資料後的記憶體（傳入的記憶體已經有了就沿用，例如接續上一關）
+        if (mem.u32(Characters.PTR) != Characters.ARRAY) NewGame.init(mem, files)
         vm.start(0)
     }
 

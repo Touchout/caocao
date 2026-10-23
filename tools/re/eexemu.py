@@ -23,6 +23,7 @@ THIS = 0x10000000
 SCRIPT = 0x20000000
 STACK = 0x30000000
 RET_MAGIC = 0x0DEAD000
+ALLOC = 0x60000000       # GlobalAlloc 配置的區域
 PAGE = 0x1000
 
 
@@ -117,10 +118,21 @@ class EexEmu:
     def _on_api(self, mu, addr, size, user):
         name = self.import_names.get(addr)
         n = ARGS.get(name, 0)
+        if os.environ.get("EMU_API_LOG"):
+            print("API", name, file=sys.stderr)
         esp = mu.reg_read(UC_X86_REG_ESP)
         ret = struct.unpack("<I", mu.mem_read(esp, 4))[0]
         value = 0
-        if name == "GetTickCount":
+        if name == "GlobalAlloc":
+            # 記憶體配置：從 ALLOC 區域依序切，內容是 0；GlobalLock 回傳同一個位址
+            size = (struct.unpack("<I", mu.mem_read(esp + 8, 4))[0] + 0xFFFF) & ~0xFFFF
+            self.alloc_next = getattr(self, "alloc_next", ALLOC)
+            value = self.alloc_next
+            mu.mem_map(value, size)
+            self.alloc_next += size
+        elif name == "GlobalLock":
+            value = struct.unpack("<I", mu.mem_read(esp + 4, 4))[0]
+        elif name == "GetTickCount":
             # 等待迴圈（0x09 延时 等）靠時間前進才會結束：每次呼叫前進 1 秒
             self.ticks = getattr(self, "ticks", 0) + 1000
             value = self.ticks

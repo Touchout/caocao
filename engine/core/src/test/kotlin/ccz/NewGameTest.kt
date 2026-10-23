@@ -18,7 +18,8 @@ class NewGameTest {
 
     /** 只有模擬器才有、或跟遊戲邏輯無關的位置。 */
     private val ignored = listOf(
-        0x48B100L until 0x48B110L, // 暫存緩衝區物件（模擬器直接給一塊）
+        0x48B0C0L until 0x48B170L, // 緩衝區物件（0x42B88B 配置，GlobalAlloc 的位址只在模擬器裡有意義）
+        0x4BE800L until 0x4BE880L, // 畫面 DIB（0x42B88B → 0x40353F，CreateDIBSection）
         0x496F60L until 0x496F64L, // 讀檔緩衝區指標（模擬器的位址）
         0x496E28L until 0x496E34L, // 讀檔時組檔名的字串暫存（"\SV\SV.E5…"）
     )

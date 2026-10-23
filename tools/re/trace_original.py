@@ -48,7 +48,22 @@ LOAD_BUF_PTR = 0x496F60     # 讀檔用的緩衝區指標
 UNITS = 0x4A7B20            # 戰場單位表（250 × 0x30，[0] = 武將編號，空格 0xFFFF）
 UNIT_SIZE = 0x30
 UNIT_SLOTS = 250
-TEMP_BUF = 0x48B100         # 暫存緩衝區物件
+TEMP_BUF = 0x48B100         # 暫存緩衝區物件（BUF_OBJS 的第 4 個）
+BATTLE_INIT = 0x44D2CA      # 開戰初始化（thiscall ecx = 戰場物件 0x4B3D08）：載地圖、從配置表建戰場單位
+BATTLE_OBJ = 0x4B3D08
+GAME_MODE = 0x4AC63C        # 遊戲狀態（byte）：1 城內劇本、3 戰場…（0x27 背景显示 經 0x428346 設定）
+LOAD_HEXZ_RET = 0x44C217    # 0x44C1C2 載入地圖時呼叫讀檔 0x41FC89 的返回位址
+READ_ENTRY = 0x41FC89       # 讀 LS12 封包某一項（thiscall ecx = 檔案物件；stdcall：項目, 目的）
+# 開戰初始化裡的畫面函式：不執行，直接回傳 0（位址, stdcall 彈掉的 bytes）
+SCREEN_STUBS = [
+    (0x4789D6, 0x14),   # 讀圖檔並解碼（單位圖、介面圖）
+    (0x40E770, 0x10),   # 圖片解碼（調色盤轉換）
+    (0x402EDB, 0x18),   # 畫面清除
+    (0x45218F, 0x10),   # 畫地圖格
+    (0x420BAE, 0x00),   # 開執行緒載入地圖 JPG（MAP\M%03d.Jpg）
+    (0x4318E5, 0x0C),   # 讀圖檔並解碼（0x40BCD2 的圖片載入）
+]
+ALLOC_BUFFERS = 0x42B88B    # 配置 9 個緩衝區物件（0x48B0C0 起，見 init_buffers）
 HEAP = 0x40000000           # 模擬器裡自己配置的區域（取代原版 new 出來的陣列）
 TABLE_VA = 0x410A38         # 指令跳轉表，索引 = opcode − 2
 
@@ -96,12 +111,47 @@ class Original(EexEmu):
         mu.mem_write(LOAD_BUF_PTR, struct.pack("<I", buf))
         mu.mem_write(CHARS_PTR, struct.pack("<I", chars))
         mu.mem_write(ITEMS2_PTR, struct.pack("<I", items2))
-        # 暫存緩衝區物件（0x40159C 取得）：[0] 型別 1 = 記憶體、+4 大小、+0xC 起點。原版啟動時建立，這裡直接給一塊
-        mu.mem_write(TEMP_BUF, struct.pack("<BxxxII", 1, 0x100000, 0) + struct.pack("<I", HEAP + 0x300000))
+        self.init_buffers()
         self.mu.hook_add(UC_HOOK_CODE, self._on_load_entry, begin=LOAD_ENTRY, end=LOAD_ENTRY)
         self.star = open(os.path.join(os.path.dirname(data_e5_path), "Star.e5"), "rb").read()
         self.mu.hook_add(UC_HOOK_CODE, self._on_load_star, begin=LOAD_STAR, end=LOAD_STAR)
         return self.call(LOAD_ALL_DATA)
+
+    def init_battle_hooks(self, hexzmap_path):
+        """開戰初始化需要的攔截：地圖檔 Hexzmap.e5 直接給內容、畫面函式不執行。"""
+        import ls12_reader
+        self.hexz = ls12_reader.entries(hexzmap_path)
+        self.mu.hook_add(UC_HOOK_CODE, self._on_read_entry, begin=READ_ENTRY, end=READ_ENTRY)
+        for addr, pops in SCREEN_STUBS:
+            self._stub(addr, pops // 4, lambda a: None)
+
+    def _on_read_entry(self, mu, addr, size, user):
+        esp = mu.reg_read(UC_X86_REG_ESP)
+        ret, index, dest = struct.unpack("<III", mu.mem_read(esp, 12))
+        if ret != LOAD_HEXZ_RET:
+            raise RuntimeError(f"讀檔 0x41FC89 從 {ret:#x} 呼叫，還沒有攔截")
+        mu.mem_write(dest, self.hexz[index])
+        mu.reg_write(UC_X86_REG_ESP, esp + 12)
+        mu.reg_write(UC_X86_REG_EIP, ret)
+
+    def battle_init(self):
+        """原版進入戰場狀態時的初始化 0x44D2CA（0x44F058 → 新戰場）。"""
+        mu = self.mu
+        esp = STACK + 0x80000 - 4
+        mu.mem_write(esp, struct.pack("<I", RET_MAGIC))
+        mu.reg_write(UC_X86_REG_ESP, esp)
+        mu.reg_write(UC_X86_REG_EBP, esp + 0x100)
+        mu.reg_write(UC_X86_REG_ECX, BATTLE_OBJ)
+        mu.emu_start(BATTLE_INIT, RET_MAGIC, count=50_000_000)
+        if mu.reg_read(UC_X86_REG_EIP) != RET_MAGIC:
+            raise RuntimeError(f"開戰初始化沒有跑完，停在 {mu.reg_read(UC_X86_REG_EIP):#x}")
+
+    def init_buffers(self):
+        """原版啟動時配置 9 個緩衝區物件（0x42B88B：0x48B0C0 + 0x10·i，大小表 0x42B908，GlobalAlloc）。
+        物件：[0] 型別 1 = 記憶體、+4 大小、+8 / +0xC 起點；0x47FA40(偏移) 回傳 起點 + min(偏移, 大小)。
+        例：0x48B100 暫存（0x40159C），0x48B140 戰場（地形 +0x640、佔位 +0xC80，0x40167E／0x401669）。
+        開戰（0x44D2CA）會整組釋放再重新配置。"""
+        self.call(ALLOC_BUFFERS)
 
     def _on_load_star(self, mu, addr, size, user):
         # 0x451313：用 Windows 檔案 API 把 Star.e5 開頭最多 0x27D8 bytes 讀到 ecx（道具 104 起）。模擬器沒有檔案 API，直接給
@@ -177,7 +227,9 @@ class Original(EexEmu):
         def hook(mu, a, size, user):
             esp = mu.reg_read(UC_X86_REG_ESP)
             words = struct.unpack("<5I", mu.mem_read(esp, 20))
-            self.events.append(record(words[1:]))
+            ev = record(words[1:])
+            if ev is not None:
+                self.events.append(ev)
             mu.reg_write(UC_X86_REG_EAX, ret)
             mu.reg_write(UC_X86_REG_ESP, esp + 4 + 4 * pops)
             mu.reg_write(UC_X86_REG_EIP, words[0])
@@ -270,6 +322,7 @@ class Driver:
         self.orig.init_statics()
         self.orig.init_game_data(os.path.join(os.path.dirname(exe), "Data.e5"))
         self.orig.set_roster(roster)
+        self.orig.init_battle_hooks(os.path.join(os.path.dirname(exe), "Hexzmap.e5"))
         self.sigs = load_signatures()
         self.trace = []
 
@@ -321,9 +374,16 @@ class Driver:
         op = self.u16(pos)
         before = self.orig.snap()
         self.orig.events = []
+        mode = self.orig.mu.mem_read(GAME_MODE, 1)[0]
         end, ret, ok = self.orig.exec_op(op, pos)
+        battle = op == 0x27 and mode != 3 and self.orig.mu.mem_read(GAME_MODE, 1)[0] == 3
+        if battle:
+            # 原版：0x27 設定戰場狀態後劇本暫停，主迴圈 0x42C228 進入戰場 0x44F058 → 0x44D2CA，之後才繼續執行劇本
+            self.orig.battle_init()
         after = self.orig.snap()
         rec = {"pos": pos, "op": op, "ret": ret & 0xFFFFFFFF, "ok": ok}
+        if battle:
+            rec["battle_init"] = True
         if self.orig.events:
             rec["display"] = self.orig.events
         changes = diff(before, after)

@@ -63,6 +63,7 @@ SCREEN_STUBS = [
     (0x420BAE, 0x00),   # 開執行緒載入地圖 JPG（MAP\M%03d.Jpg）
     (0x4318E5, 0x0C),   # 讀圖檔並解碼（0x40BCD2 的圖片載入）
     (0x40690C, 0x18),   # 逐像素混色（撤退淡出等效果）
+    (0x41381B, 0x00),   # 地圖 JPG 解碼成畫面（0x407D08 載入地圖之後）
 ]
 ALLOC_BUFFERS = 0x42B88B    # 配置 9 個緩衝區物件（0x48B0C0 起，見 init_buffers）
 HEAP = 0x40000000           # 模擬器裡自己配置的區域（取代原版 new 出來的陣列）
@@ -143,9 +144,12 @@ class Original(EexEmu):
         mu.reg_write(UC_X86_REG_ESP, esp)
         mu.reg_write(UC_X86_REG_EBP, esp + 0x100)
         mu.reg_write(UC_X86_REG_ECX, BATTLE_OBJ)
-        mu.emu_start(BATTLE_INIT, RET_MAGIC, count=50_000_000)
+        try:
+            mu.emu_start(BATTLE_INIT, RET_MAGIC, count=50_000_000)
+        except UcError as e:
+            raise RuntimeError(f"開戰初始化出錯 {e}，呼叫鏈 {self.call_stack()}") from e
         if mu.reg_read(UC_X86_REG_EIP) != RET_MAGIC:
-            raise RuntimeError(f"開戰初始化沒有跑完，停在 {mu.reg_read(UC_X86_REG_EIP):#x}")
+            raise RuntimeError(f"開戰初始化沒有跑完，呼叫鏈 {self.call_stack()}")
 
     def init_buffers(self):
         """原版啟動時配置 9 個緩衝區物件（0x42B88B：0x48B0C0 + 0x10·i，大小表 0x42B908，GlobalAlloc）。

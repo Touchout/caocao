@@ -57,6 +57,11 @@ def main(argv):
             if oi >= len(eng) or eng[oi]["pos"] != orig[oi]["pos"]:
                 print(f"S_{n}：開戰初始化之前路徑就不同")
                 continue
+            stuck = [r for r in orig[:oi] if not r["ok"]]
+            if stuck:
+                # 例如單獨跑一關時強制出場的武將還不是我軍 → 出戰名單空 → 原版算敵軍等級時除以零（真實遊戲不會發生）
+                print(f"S_{n}：開戰之前原版有 {len(stuck)} 條指令沒跑完（第一條 op {stuck[0]['op']:#x}，停在 {stuck[0].get('stall')}），不比")
+                continue
             a, b = writes(orig[oi]), writes(eng[oi])
             diff = [k for k in set(a) | set(b) if a.get(k) != b.get(k)]
             if not diff:

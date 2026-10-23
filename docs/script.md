@@ -101,7 +101,9 @@
 
 `docs/methodology.md` 方法 2 的工具：
 
-1. 原版：`python3 tools/re/trace_original.py <Ekd5.exe> <S_nnn.eex> <scene> out/trace_<名>_orig.jsonl`
+1. 原版：`python3 tools/re/trace_original.py <Ekd5.exe> <S_nnn.eex> <scene> out/trace_<名>_orig.jsonl [出陣]`
+   - 出陣（出戰名單）是玩家輸入，逗號分隔的武將編號，預設 `0`；開始前寫進名單（沒有 0x4A 的關卡沿用上一場），出陣選擇畫面 0x45E6B3 也回傳它。
+   - 除了變數、旗標，也逐 byte 比對記憶體區域（`MEM_REGIONS`：配置表、0x46/0x47 計數、出戰名單、武將資料、單位表、修正紀錄、頭像表）。
    - 模擬器先做原版啟動時的初始化：單位表空格（`init_statics`）、暫存緩衝區物件 0x48B100、執行原版 Data 載入函式 0x41B639
      （攔截讀檔 0x41B533 直接給 Data.e5 的內容）。
    - 逐條呼叫原版處理函式（真實 VM 物件 0x492F90，記憶體跨指令保留）；區塊流程由 Python 驅動（規則同 ScriptVM）。
@@ -110,12 +112,11 @@
    - Windows API 沒有實作：呼叫時照 stdcall 彈掉參數（個數表 `tools/re/winapi_args.py`）並回傳 0；GetTickCount 每次前進 1 秒
      （0x09 延时 之類的等待迴圈才會結束）。
    - 每條記錄：pos、op、條件結果、彈出文字、歷史情報、整數／指標變數與旗標的變化、`ok`（處理函式有沒有跑完）。
-2. 引擎：`cd engine && ./gradlew :desktop:trace --args="<遊戲目錄> <關卡> ../out/trace_<名>_engine.jsonl"`（同格式）。
+2. 引擎：`cd engine && ./gradlew :desktop:trace --args="<遊戲目錄> <關卡> ../out/trace_<名>_engine.jsonl [出陣]"`（同格式）。
 3. 比對：`python3 tools/re/compare_trace.py <原版> <引擎>`，路徑分岔就停，其餘逐條列出不同。選擇題兩邊都答 1。
 
 現況（2026-10-23）：S_000 scene 0 共 160 條**完全一致**（0x4E 在模擬器裡跑不完，那一條的比對不可靠，待查）。
-S_002 scene 0 共 358 條也**完全一致**，但 0x47、0x31 在模擬器裡跑不完：0x47 敌军出场设定 用我軍出戰名單算敵軍等級
-（0x4184DD，名單空的會除以零，見 `docs/battle.md`「敵軍等級」），單獨跑 S_002 時名單是空的；0x31 待查。
+S_002 scene 0 共 358 條也**完全一致**（含記憶體區域；出陣 = 只派曹操）。0x31 武将消失 在模擬器裡跑不完，待查。
 
 ## 已知但還沒處理
 

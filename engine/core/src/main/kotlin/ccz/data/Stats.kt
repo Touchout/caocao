@@ -198,4 +198,44 @@ object Stats {
             else -> true
         }
     }
+
+    /** 0x41055D：重算用的修正值。0x66 號以前、我軍標識 == 0 的武將取修正紀錄（i16），其他 0。 */
+    fun bonus(mem: EngineMemory, character: Int, stat: Int): Int {
+        if ((character and 0xffff) >= BONUS_LOG_LIMIT) return 0
+        if (mem.u8(rec(mem, character) + 0x2A) != 0) return 0
+        return mem.u16(BONUS_LOG + 0xEL * character + 2 * stat).toShort().toInt()
+    }
+
+    /** 0x413FAC：HP/MP 的轉職加成。不是我軍（標識 0xFF）或兵種 > 59 時 0；否則 2 × 階段 × 兵種值（含成長修正）。 */
+    fun promotionBonus(mem: EngineMemory, character: Int, stat: Int): Int {
+        val r = rec(mem, character)
+        if (mem.u8(r + 0x2A) == 0xFF) return 0
+        val cls = mem.u8(r + 0x2B)
+        if (cls > 0x3B) return 0
+        val g = growthAdjust(mem, character, stat, mem.u8(NewGame.CLASSES + 0x23L * cls + 2 + stat))
+        return g * (cls % 3) * 2
+    }
+
+    /**
+     * 0x4149CF：依兵種、等級重算能力（0x52 兵种改变 在整數變數 4081 的低位 byte ≠ 0 時呼叫）。
+     * 攻擊～士氣 = 等級成長 + 修正 + 五維；HP、MP = 等級成長 + 修正 + 轉職加成 + Data.e5 原始值（只寫低 16 位）。
+     */
+    fun recompute(mem: EngineMemory, character: Int, rawCharacters: ByteArray) {
+        val r = rec(mem, character)
+        val raw = character * 32
+        for (stat in 0 until 7) {
+            val base = levelGrowth(mem, character, stat) + bonus(mem, character, stat)
+            if (stat < 5) {
+                mem.setU16(r + 0x11 + 2 * stat, (base + mem.u8(r + 0x21 + stat)).toLong() and 0xffff)
+            } else {
+                val t = (base and 0xffff) + promotionBonus(mem, character, stat)
+                if (stat == 5) {
+                    val hp = (rawCharacters[raw + 0x17].toInt() and 0xff) or ((rawCharacters[raw + 0x18].toInt() and 0xff) shl 8)
+                    mem.setU16(r + 0x1B, (t + hp).toLong() and 0xffff)
+                } else {
+                    mem.setU16(r + 0x1F, (t + (rawCharacters[raw + 0x19].toInt() and 0xff)).toLong() and 0xffff)
+                }
+            }
+        }
+    }
 }

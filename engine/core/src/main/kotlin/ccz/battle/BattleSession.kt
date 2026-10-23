@@ -5,6 +5,7 @@ import ccz.data.ClassTables
 import ccz.data.GameData
 import ccz.data.HexzMap
 import ccz.data.NewGame
+import ccz.data.Stats
 import ccz.io.GameFiles
 import ccz.script.Attributes
 import ccz.script.EngineMemory
@@ -25,6 +26,8 @@ class BattleSession(
     val tables: ClassTables,
     val stage: Int,
     val mem: EngineMemory = EngineMemory(files.bytes("Ekd5.exe")),
+    /** 出陣（玩家輸入）：開新遊戲時當成「上一場的出戰名單」，出陣選擇畫面也回傳這些。原型預設只派曹操。 */
+    val sortie: List<Int> = listOf(0),
 ) : ScriptHost {
     val vm = ScriptVM(files.bytes("RS/S_%03d.eex".format(stage)), mem, this)
 
@@ -36,6 +39,9 @@ class BattleSession(
     var setupDone = false
         private set
 
+
+    /** Data.e5 第 0 項原始資料（0x46/0x47 讀裝備用，原版每次重讀）。 */
+    private val rawCharacters: ByteArray by lazy { files.archive("Data.e5")[0] }
 
     private val nameIndex: Map<String, Int> by lazy {
         val m = HashMap<String, Int>()
@@ -49,7 +55,10 @@ class BattleSession(
 
     init {
         // 開新遊戲：原版載入資料後的記憶體（傳入的記憶體已經有了就沿用，例如接續上一關）
-        if (mem.u32(Characters.PTR) != Characters.ARRAY) NewGame.init(mem, files)
+        if (mem.u32(Characters.PTR) != Characters.ARRAY) {
+            NewGame.init(mem, files)
+            Deployment.setRoster(mem, sortie)
+        }
         vm.start(0)
     }
 
@@ -82,17 +91,33 @@ class BattleSession(
                 early.forEach { it(b) }
                 early.clear()
             }
-            0x46 -> placements(ins, 11, Side.ALLY).forEach { pl -> onBattle { it.add(pl) } }
-            0x47 -> placements(ins, 12, Side.ENEMY).forEach { pl -> onBattle { it.add(pl) } }
+            0x46, 0x47 -> {
+                val enemy = ins.op == 0x47
+                if (!Deployment.place(mem, ins, enemy, rawCharacters)) vm.gaps.merge("出戰名單是空的（原版除以零）", 1, Int::plus)
+                placements(ins, if (enemy) 12 else 11, if (enemy) Side.ENEMY else Side.ALLY).forEach { pl -> onBattle { it.add(pl) } }
+            }
+            0x44 -> Deployment.battleInit(mem)
+            0x48 -> Deployment.equip(mem, p[0].value, listOf(p[1].value, p[3].value, p[5].value), listOf(p[2].value, p[4].value))
             0x4B -> {
                 val ints = p.filter { it.type == 0x04 }
+                Deployment.placePlayer(mem, ints[0].value, ints[1].value, ints[2].value, ins.param(0x2B)!!.value, ins.param(0x26)?.value ?: 0xFFFF)
                 val slot = PlayerSlot(ints[0].value, ints[1].value, ints[2].value, ins.param(0x2B)!!.value)
                 onBattle { b -> b.playerSlots.removeAll { it.index == slot.index }; b.playerSlots += slot }
             }
-            0x4A -> p.filter { it.type == 0x38 && it.value < 0xEFFF }.map { it.value }
-                .forEach { c -> onBattle { b -> if (c !in b.forcedPlayers) b.forcedPlayers += c } }
+            // 0x4A 我军出场强制设定：原版在這裡開出陣選擇畫面（0x418597），選完寫出戰名單
+            0x4A -> { Deployment.forceSortie(mem, ins, sortie); p.filter { it.type == 0x38 && it.value < 0xEFFF }.map { it.value }
+                .forEach { c -> onBattle { b -> if (c !in b.forcedPlayers) b.forcedPlayers += c } } }
             0x75 -> { val c = p[0].value; val img = p[1].value; onBattle { it.imageOverrides[c] = img } }
-            0x52 -> { val c = p[0].value; val cls = p[1].value; onBattle { it.classOverrides[c] = cls; it.units.filter { u -> u.character == c }.forEach { u -> u.unitClass = cls } } }
+            // 0x52 兵种改变（0x414BD4）：寫兵種；檢查裝備還能不能用（0x414B93，還沒移植）；變數 4081 低位 ≠ 0 時重算能力
+            0x52 -> {
+                val c = p[0].value; val cls = p[1].value
+                if (c < 0x400) {
+                    mem.setU8(Characters.addr(mem, c) + 0x2B, cls and 0xff)
+                    vm.gaps.merge("0x52 換兵種後的裝備檢查", 1, Int::plus)
+                    if (mem.u8(EngineMemory.INT_VARS + 4L * 4081) != 0) Stats.recompute(mem, c, rawCharacters)
+                }
+                onBattle { it.classOverrides[c] = cls; it.units.filter { u -> u.character == c }.forEach { u -> u.unitClass = cls } }
+            }
             // 战场障碍设定：(42 編號, 43 ?, 44 地形, x, y, 26, 26)。原型直接改地形。
             0x58 -> { val t = p[2].value; val x = p[3].value; val y = p[4].value; onBattle { it.map.setTerrain(x, y, t) } }
             // 战场转向设置（武將, 面向的武將, 方向, …）
@@ -120,7 +145,7 @@ class BattleSession(
             0x31 -> if (p[0].value == 0) onBattle { b -> b.units.removeAll { it.character == p[1].value } }
             // 認得但原型還不處理的：战斗初始化、战场全局变量、敌方装备设定、绘图、CD音轨、音效、信息传送、菜单处理、
             // 延时、战场动作设定、战场操作开始、武将能力设定、方针变更、状态变更、单挑动作…
-            0x44, 0x45, 0x48, 0x1C, 0x1D, 0x1E, 0x24, 0x23, 0x72, 0x08, 0x20, 0x5D, 0x56, 0x57, 0x1B,
+            0x45, 0x1C, 0x1D, 0x1E, 0x24, 0x23, 0x72, 0x08, 0x20, 0x5D, 0x56, 0x57, 0x1B,
             0x09, 0x50, 0x5A, 0x4E, 0x4D, 0x64, 0x65, 0x66, 0x5B, 0x5C, 0x21 -> {}
             else -> return false
         }
@@ -163,15 +188,15 @@ class BattleSession(
     fun face(character: Int): Int = attr(character, ATTR_FACE).toInt()
 
     /**
-     * 0x46 友軍每人 11 個參數：武將, 26, x, y, 朝向, AI, 45, 07, 目標武將, 目標x, 目標y
-     * 0x47 敵軍每人 12 個參數：武將, 26, 26, x, y, 朝向, AI, …（多一個 26）
+     * 0x46 友軍每人 11 個參數：武將, 26 隱藏, x, y, 2B 朝向, 3E 等級, 45, 07 AI, 目標武將, 目標x, 目標y
+     * 0x47 敵軍每人 12 個參數：武將後面多一個 26，其餘同上
      */
     private fun placements(ins: Instr, stride: Int, side: Side): List<Placement> =
         ins.params.chunked(stride).mapNotNull { r ->
             val ch = r[0].value
             if (r.size < stride || ch == 0xFFFF || ch >= 0xEFFF) return@mapNotNull null
             val off = stride - 11
-            Placement(ch, side, r[2 + off].value, r[3 + off].value, r[4 + off].value, r[5 + off].value, r[1 + off].value == 1)
+            Placement(ch, side, r[2 + off].value, r[3 + off].value, r[4 + off].value, r[7 + off].value, r[1 + off].value == 1, r[5 + off].value)
         }
 
     companion object {

@@ -13,10 +13,12 @@ data class Placement(
     val y: Int,
     /** 2B 參數：朝向。數值意義還沒確認。 */
     val direction: Int,
-    /** 3E 參數：AI 方針，見 tools/eex_types.json。 */
+    /** 07 參數：AI 方針，見 tools/eex_types.json。 */
     val ai: Int,
-    /** 推測：一開始隱藏、之後才出現的伏兵。 */
+    /** 26 參數：一開始隱藏（配置表旗標 4，0x41240B）。 */
     val hidden: Boolean,
+    /** 3E 參數：等級（相對參考等級，見 docs/battle.md「敵軍等級」）。 */
+    val level: Int = 0,
 )
 
 /** 我軍出場格（0x4B）。哪名武將站上來由玩家決定，強制出場（0x4A）的先排。 */
@@ -65,7 +67,7 @@ class BattleSetup(
 
         /**
          * 0x46 友軍每人 11 個參數：武將, 26, x, y, 朝向, AI, 45, 07, 目標武將, 目標x, 目標y
-         * 0x47 敵軍每人 12 個參數：武將, 26, 26, x, y, 朝向, AI, …（多一個 26）
+         * 0x47 敵軍每人 12 個參數：武將, 26, 26 隱藏, x, y, 朝向, 等級, 45, AI, …（武將後多一個 26）
          */
         private fun records(ins: Instr, stride: Int, side: Side): List<Placement> =
             ins.params.chunked(stride).mapNotNull { r ->
@@ -78,8 +80,9 @@ class BattleSetup(
                     x = r[2 + off].value,
                     y = r[3 + off].value,
                     direction = r[4 + off].value,
-                    ai = r[5 + off].value,
+                    ai = r[7 + off].value,
                     hidden = r[1 + off].value == 1,
+                    level = r[5 + off].value,
                 )
             }
 

@@ -11,7 +11,8 @@
 區塊流程（section 條件、opcode 0/1、else）由這裡的 Python 驅動，規則同引擎 ScriptVM（docs/script.md）；
 原版負責區塊流程的上層迴圈還沒找到，這是目前的已知限制。
 
-用法：python3 tools/re/trace_original.py <Ekd5.exe> <S_nnn.eex> <scene> [輸出.jsonl]
+用法：python3 tools/re/trace_original.py <Ekd5.exe> <S_nnn.eex> <scene> [輸出.jsonl] [出陣武將，逗號分隔，預設 0]
+出陣（出戰名單）是玩家輸入，兩邊要給一樣的（引擎 :desktop:trace 的第 4 個參數）。
 選擇題一律答 1（是／第一個選項），跟引擎端的軌跡輸出一致。
 """
 import json
@@ -35,6 +36,8 @@ BATTLE_TALK = 0x45965D      # 戰場上的對話（stdcall，2 個參數：文�
 MESSAGE = 0x42F699          # 訊息視窗（cdecl：種類, 文字）；0x69 旁白用種類 2
 CHOICE_MENU = 0x42DE7D      # 選擇框（stdcall，3 個參數：選項, 說話者, ?），回傳選到第幾個（從 0 起）
 VICTORY = 0x44BE80          # 顯示勝利條件（thiscall ecx = 0x4B3D08，1 個參數：文字）
+SORTIE_MENU = 0x45E6B3      # 出陣選擇畫面（stdcall，3 個參數），回傳選好的武將資料指標陣列（0 結尾）
+ROSTER = 0x48B350           # 我軍出戰名單（u16 × 最多 20，0xFFFF 結尾）
 BATTLE_LOOP = 0x44B328      # 0x5A 战场操作开始：進入戰場主迴圈（玩家操作），模擬器裡不執行
 LOAD_ENTRY = 0x41B533       # 讀 Data.e5 某一項到緩衝區（stdcall：檔名, 項目, 目的位址），成功回傳 1
 LOAD_STAR = 0x451313        # 讀 Star.e5（6.6 的道具 104 起）
@@ -80,6 +83,8 @@ class Original(EexEmu):
         self._stub(CHOICE_MENU, 3, lambda a: {"choice": a[1]})  # 一律選第一個（引擎軌跡也答 1）
         self._stub(VICTORY, 1, lambda a: {"display": self.cstr(a[0]), "victory": True})
         self._stub(BATTLE_LOOP, 1, lambda a: {"battle_start": True})
+        self.sortie = [0]
+        self.mu.hook_add(UC_HOOK_CODE, self._on_sortie, begin=SORTIE_MENU, end=SORTIE_MENU)
 
     def init_game_data(self, data_e5_path):
         """照原版開新遊戲時的方式載入 Data.e5：陣列放在 HEAP，攔截讀檔函式直接給資料，再執行原版的載入函式。"""
@@ -150,6 +155,23 @@ class Original(EexEmu):
         mu.reg_write(UC_X86_REG_ESP, esp + 4 + 12)
         mu.reg_write(UC_X86_REG_EIP, ret)
 
+    def set_roster(self, chars):
+        """出陣是玩家輸入：出陣選擇畫面一律回傳這些武將，名單也先寫好（沒有 0x4A 的關卡沿用上一場名單）。"""
+        self.sortie = list(chars)
+        data = b"".join(struct.pack("<H", c) for c in self.sortie) + b"\xff\xff"
+        self.mu.mem_write(ROSTER, data)
+
+    def _on_sortie(self, mu, addr, size, user):
+        esp = mu.reg_read(UC_X86_REG_ESP)
+        ret = struct.unpack("<I", mu.mem_read(esp, 4))[0]
+        base = struct.unpack("<I", mu.mem_read(CHARS_PTR, 4))[0]
+        lst = HEAP + 0x380000
+        mu.mem_write(lst, b"".join(struct.pack("<I", base + 0x48 * c) for c in self.sortie) + b"\0" * 4)
+        self.events.append({"sortie": self.sortie})
+        mu.reg_write(UC_X86_REG_EAX, lst)
+        mu.reg_write(UC_X86_REG_ESP, esp + 4 + 12)
+        mu.reg_write(UC_X86_REG_EIP, ret)
+
     def _stub(self, addr, pops, record, ret=0):
         """攔截函式：記錄 record(參數) 回傳的事件，不執行原函式，直接回傳 ret（pops = stdcall 要彈掉的參數個數）。"""
         def hook(mu, a, size, user):
@@ -180,6 +202,7 @@ class Original(EexEmu):
             "ptr": bytes(mu.mem_read(PTR_VARS, 0x1000)),
             "flag": bytes(mu.mem_read(FLAGS, 0x2000)),
             "glen": struct.unpack("<I", mu.mem_read(GUIDE_LEN, 4))[0],
+            "mem": [bytes(mu.mem_read(a, n)) for a, n in MEM_REGIONS],
         }
 
     def exec_op(self, op, pos):
@@ -206,8 +229,24 @@ class Original(EexEmu):
         return end, mu.reg_read(UC_X86_REG_EAX), ok
 
 
+# 逐 byte 比對的記憶體區域（引擎 Trace.kt 用同一份清單）
+MEM_REGIONS = [
+    (0x492F90 + 0x2044, 250 * 16),   # 出場配置表
+    (0x500AD4, 2),                   # 0x46/0x47 執行次數
+    (ROSTER, 42),                    # 出戰名單
+    (HEAP + 0x100000, 1024 * 0x48),  # 武將資料
+    (0x4A7B20, 250 * 0x30),          # 戰場單位表
+    (0x508400, 0x66 * 14),           # 能力修正紀錄
+    (0x50F000, 0x1000),              # 頭像表、R 形象表
+]
+
+
 def diff(before, after):
     out = []
+    for (base, n), b, a in zip(MEM_REGIONS, before["mem"], after["mem"]):
+        for i in range(n):
+            if b[i] != a[i]:
+                out.append({"mem": base + i, "value": a[i]})
     for i in range(0, len(before["int"]), 4):
         if before["int"][i:i + 4] != after["int"][i:i + 4]:
             out.append({"var": i // 4, "value": struct.unpack_from("<I", after["int"], i)[0]})
@@ -225,11 +264,12 @@ def diff(before, after):
 class Driver:
     """區塊流程（同 ScriptVM），逐條呼叫原版處理函式。"""
 
-    def __init__(self, exe, script_path):
+    def __init__(self, exe, script_path, roster=(0,)):
         self.data = open(script_path, "rb").read()
         self.orig = Original(exe, self.data)
         self.orig.init_statics()
         self.orig.init_game_data(os.path.join(os.path.dirname(exe), "Data.e5"))
+        self.orig.set_roster(roster)
         self.sigs = load_signatures()
         self.trace = []
 
@@ -359,7 +399,8 @@ class Driver:
 def main(argv):
     exe, script, scene = argv[1], argv[2], int(argv[3])
     out = argv[4] if len(argv) > 4 else None
-    d = Driver(exe, script)
+    roster = [int(x) for x in argv[5].split(",")] if len(argv) > 5 else [0]
+    d = Driver(exe, script, roster)
     d.run_scene(scene)
     lines = [json.dumps(r, ensure_ascii=False) for r in d.trace]
     if out:

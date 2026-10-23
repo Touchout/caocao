@@ -13,7 +13,7 @@ def load(path):
 
 
 def norm_writes(r):
-    return sorted((k, w[k], w["value"]) for w in r.get("writes", []) for k in ("var", "ptr", "flag") if k in w)
+    return sorted((k, w[k], w["value"]) for w in r.get("writes", []) for k in ("var", "ptr", "flag", "mem") if k in w)
 
 
 def texts(r):

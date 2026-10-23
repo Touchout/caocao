@@ -34,8 +34,10 @@ fun main(args: Array<String>) {
     val session = BattleSession(files, data, ClassTables(files), stage)
     val dialogues = ArrayList<String>()
     val dialogueEvents = ArrayList<ScriptEvent.Dialogue>()
+    val dump = System.getenv("CCZ_DUMP_EVENTS") != null
     while (true) {
         val e = session.next() ?: break
+        if (dump) println("事件 " + e.toString().replace('\n', '/').take(160))
         when (e) {
             is ScriptEvent.Choice, is ScriptEvent.YesNo -> session.answer(1)
             is ScriptEvent.Dialogue -> {
@@ -70,7 +72,7 @@ fun main(args: Array<String>) {
 
     val sprites = HashMap<Pair<Int, Direction>, BufferedImage?>()
     for (u in units) {
-        val index = BattleSetup.spriteIndex(data, u.character, u.side, battle.imageOverrides)
+        val index = BattleSetup.spriteIndex(data, u.character, u.unitClass, u.side, battle.imageOverrides)
         val sprite = sprites.getOrPut(index to u.direction) {
             runCatching {
                 val strip = ImageIO.read(ByteArrayInputStream(files.archive("Unit_mov.e5")[index]))

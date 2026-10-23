@@ -54,6 +54,12 @@ class BattleView(
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 40f }
     private val nameText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 220, 120); textSize = 40f; isFakeBoldText = true }
     private val endTurnRect = RectF()
+    private val guideRect = RectF()
+
+    /** 「歷史情報」目前顯示的頁；null 表示沒打開。 */
+    private var guidePage: Int? = null
+    private val guideLines: List<String>
+        get() = session.vm.guide.sortedBy { it.order }.flatMap { Game.tw(it.body).split('\n') }
     private val optionRects = ArrayList<RectF>()
 
     /** 劇本目前要顯示的事件；null 表示開戰處理跑完、可以操作。 */
@@ -155,6 +161,16 @@ class BattleView(
 
     private fun tapBattle(sx: Float, sy: Float) {
         val b = battle ?: return
+        guidePage?.let { page ->
+            guidePage = if ((page + 1) * linesPerPage() < guideLines.size) page + 1 else null
+            invalidate()
+            return
+        }
+        if (guideRect.contains(sx, sy)) {
+            if (guideLines.isEmpty()) info = listOf("這一關沒有歷史情報") else guidePage = 0
+            invalidate()
+            return
+        }
         if (endTurnRect.contains(sx, sy)) {
             b.endTurn()
             select(null)
@@ -350,20 +366,41 @@ class BattleView(
             canvas.drawRect(0f, height - lineH * info.size - 24f, width.toFloat(), height.toFloat(), paint)
             info.forEachIndexed { i, line -> canvas.drawText(line, 24f, height - lineH * (info.size - i - 1) - 24f, text) }
         }
-        val label = "結束回合"
+        button(canvas, endTurnRect, "結束回合", width - 24f, lineH)
+        button(canvas, guideRect, "情報", endTurnRect.left - 24f, lineH)
+        guidePage?.let { drawGuide(canvas, it) }
+    }
+
+    /** 右上角的按鈕，right 是右邊界。 */
+    private fun button(canvas: Canvas, r: RectF, label: String, right: Float, lineH: Float) {
         val w = text.measureText(label) + 48f
-        endTurnRect.set(width - w - 24f, 24f, width - 24f, 24f + lineH + 24f)
+        r.set(right - w, 24f, right, 24f + lineH + 24f)
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(200, 40, 40, 60)
-        canvas.drawRoundRect(endTurnRect, 16f, 16f, paint)
-        canvas.drawText(label, endTurnRect.left + 24f, endTurnRect.bottom - 30f, text)
+        canvas.drawRoundRect(r, 16f, 16f, paint)
+        canvas.drawText(label, r.left + 24f, r.bottom - 30f, text)
+    }
+
+    private fun linesPerPage() = maxOf(1, ((height - 160f) / (text.textSize * 1.3f)).toInt())
+
+    /** 歷史情報（劇本用 0x16 寫進來的攻略），點一下換頁，最後一頁再點關閉。 */
+    private fun drawGuide(canvas: Canvas, page: Int) {
+        val lines = guideLines
+        val per = linesPerPage()
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(235, 10, 10, 30)
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        canvas.drawText("歷史情報　（${page + 1} / ${(lines.size + per - 1) / per}）點一下繼續", 48f, 72f, nameText)
+        lines.drop(page * per).take(per).forEachIndexed { i, l ->
+            canvas.drawText(l, 48f, 140f + text.textSize * 1.3f * i, text)
+        }
     }
 
     private fun tileRect(x: Int, y: Int) = RectF((x * TILE).toFloat(), (y * TILE).toFloat(), ((x + 1) * TILE).toFloat(), ((y + 1) * TILE).toFloat())
 
     /** Unit_mov.e5 的一格動作（48×48），洋紅 (247,0,255) 轉透明，向右的動作用水平鏡像。 */
     private fun sprite(b: Battle, u: BattleUnit, frame: Sprites.Frame): Bitmap? {
-        val index = BattleSetup.spriteIndex(data, u.character, u.side, b.imageOverrides)
+        val index = BattleSetup.spriteIndex(data, u.character, u.unitClass, u.side, b.imageOverrides)
         return sprites.getOrPut(index to frame) {
             runCatching {
                 val strip = files.archive("Unit_mov.e5")[index]

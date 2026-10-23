@@ -70,6 +70,18 @@ class GameFilesTest {
     }
 
     @Test
+    fun spriteIndex() {
+        val f = files ?: return
+        val data = GameData(f)
+        fun idx(c: Int, side: Side = Side.PLAYER) = BattleSetup.spriteIndex(data, c, data.characters[c].unitClass, side, emptyMap())
+        assertEquals(240, idx(0))   // 曹操 S=1、群雄（兵種 0，初級）
+        assertEquals(243, idx(1))   // 夏侯惇 S=2、驃騎兵（33，初級）
+        assertEquals(660, idx(6))   // 夏侯淵 S=357 → 形象 500 → 660
+        assertEquals(3 * 3 + 2, idx(210, Side.ENEMY)) // 步兵1：沒有專屬形象，輕步兵（3）敵軍
+        assertEquals(242, BattleSetup.spriteIndex(data, 0, 2, Side.PLAYER, emptyMap())) // 曹操當霸王（高級）
+    }
+
+    @Test
     fun classTables() {
         val f = files ?: return
         val t = ClassTables(f)

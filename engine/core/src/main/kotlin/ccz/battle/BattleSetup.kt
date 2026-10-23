@@ -84,13 +84,20 @@ class BattleSetup(
             }
 
         /**
-         * 戰場人物圖在 Unit_*.e5 的編號：
-         *  - 武將有專屬形象 s（> 0）：240 + s − 1
-         *  - 否則用兵種通用圖：兵種 × 3 + 陣營（0 我軍、1 友軍、2 敵軍；配色是從圖推測的）
+         * 戰場人物圖在 Unit_*.e5 的編號（exe 0x4068A1、0x43FC48，見 docs/battle.md「人物圖」）：
+         *   S = S形象（劇本 0x75 改過的優先，否則 exe 0x501000 的表）
+         *   形象 = S == 0 ? 兵種 : S < 33 ? 80 + (S − 1) × 3 + 兵種 % 3 : S + 143
+         *   圖檔 = 形象 < 80 ? 形象 × 3 + 陣營（0 我軍、1 友軍、2 敵軍） : 形象 + 160
+         * 前 32 個專屬形象依兵種階級（初／中／高）各有一張，例如曹操 240–242。
          */
-        fun spriteIndex(data: GameData, character: Int, side: Side, overrides: Map<Int, Int>): Int {
-            val s = overrides[character] ?: data.sImages.getOrElse(character) { 0 }
-            return if (s > 0) 240 + s - 1 else data.characters[character].unitClass * 3 + side.ordinal
+        fun spriteIndex(data: GameData, character: Int, unitClass: Int, side: Side, overrides: Map<Int, Int>): Int {
+            val s = if (character < 0x400) overrides[character] ?: data.sImages.getOrElse(character) { 0 } else 0
+            val shape = when {
+                s == 0 -> unitClass
+                s < 33 -> 80 + (s - 1) * 3 + unitClass % 3
+                else -> s + 143
+            }
+            return if (shape < 80) shape * 3 + minOf(side.ordinal, 2) else shape + 160
         }
     }
 }

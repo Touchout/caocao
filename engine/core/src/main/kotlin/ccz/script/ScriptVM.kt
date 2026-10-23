@@ -18,6 +18,17 @@ sealed interface ScriptEvent {
     data class Moved(val character: Int, val fromX: Int, val fromY: Int, val toX: Int, val toY: Int) : ScriptEvent
 }
 
+/**
+ * 歷史情報的一條：mode 是寫入時變數 4071 的值（格式，1–3），text 開頭的數字是排序用的序號。
+ */
+data class GuideEntry(val mode: Int, val text: String) {
+    /** 開頭的序號；沒有時排最後。 */
+    val order: Int get() = text.takeWhile { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
+
+    /** 去掉序號後的內容。 */
+    val body: String get() = text.dropWhile { it.isDigit() }
+}
+
 /** 劇本裡跟戰場／城內狀態有關的指令由宿主處理。 */
 interface ScriptHost {
     /** 有副作用的指令（配置、地圖、形象…）。回傳 false 表示不認得（VM 會記錄下來）。 */
@@ -55,6 +66,9 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
     private var answer: Int? = null
     private var selection = 0
     private var finished = true
+    /** 「歷史情報」：0x16 在變數 4071 ≠ 0 時寫進來的攻略條目（玩家從選單打開看）。 */
+    val guide = ArrayList<GuideEntry>()
+
     /** 0x19 胜利条件 設定的文字。 */
     var victoryText = ""
         private set
@@ -235,7 +249,13 @@ class ScriptVM(private val data: ByteArray, val mem: EngineMemory, private val h
             0x14, 0x7A -> dialogue(null, p[0].text!!)
             0x15 -> dialogue(p[0].value, p[2].text!!)
             0x63 -> dialogue(null, p[1].text!!)
-            0x16, 0x17, 0x69 -> pending += ScriptEvent.Message(p.last().text!!, ins.op)
+            // 信息：變數 4071 = 0 時彈出訊息；否則寫進「歷史情報」（4071 是格式，0xFF 清空），不顯示
+            0x16 -> when (val mode = mem.intVar(4071)) {
+                0L -> pending += ScriptEvent.Message(p[0].text!!, ins.op)
+                0xFFL -> guide.clear()
+                else -> guide += GuideEntry(mode.toInt(), p[0].text!!)
+            }
+            0x17, 0x69 -> pending += ScriptEvent.Message(p.last().text!!, ins.op)
             0x67 -> pending += ScriptEvent.Message(p[1].text!!, ins.op)
             // 0x18 事件名称设定、0x19 胜利条件：只記下來；0x1A 显示胜利条件 才顯示
             0x18 -> {}

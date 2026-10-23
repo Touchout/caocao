@@ -3,7 +3,7 @@ package ccz.android
 import android.content.Context
 import ccz.data.GameData
 import ccz.io.GameFiles
-import ccz.text.Zh
+import ccz.text.GameText
 import java.io.File
 
 /**
@@ -29,8 +29,8 @@ object Game {
     val files get() = loaded!!.first
     val data get() = loaded!!.second
 
-    /** 顯示用文字一律轉成繁體（台灣用字）。 */
-    fun tw(s: String): String = Zh.toTraditional(s)
+    /** 顯示用文字一律轉成繁體（台灣用字），並去掉顏色標記。 */
+    fun tw(s: String): String = GameText.display(s)
 
     val REQUIRED = listOf("Ekd5.exe", "Data.e5", "Imsg.e5", "Hexzmap.e5", "Unit_mov.e5")
 }

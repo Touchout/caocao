@@ -88,7 +88,7 @@ def load_signatures():
 
 
 class Original(EexEmu):
-    def __init__(self, exe, script, budget=3_000_000):
+    def __init__(self, exe, script, budget=200_000_000):
         super().__init__(exe, budget=budget)
         self.data = script
         self.reads = []  # eexemu 的讀參數 hook 會寫這裡（看的是假 VM，這裡不用）

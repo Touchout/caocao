@@ -15,6 +15,10 @@ class AttackRange(private val bf: BattleField) {
 
     private fun charPtr(u: Long) = Characters.addr(mem, mem.u16(u))
 
+    /** 上一次 [collect] 收集到的目標數（原版回傳的 edx）。 */
+    var lastCount = 0
+        private set
+
     /**
      * 0x43F8C0：4 個範圍型態碼（byte 0 起，0xFF = 沒有）。byte 0 = 兵種的型態（兵種資料 +1；正在用策略時用策略的），
      * 特效 0x5B 時換成延伸型態（表 0x41CEAB）；byte 1 = 裝備特效 0x32 的值；byte 2 = 裝備特效 0x2C → 0x14；
@@ -83,6 +87,7 @@ class AttackRange(private val bf: BattleField) {
             }
         }
         if (only and 0xff != 0) return 0xFF
+        lastCount = (mem.u32(LIST_END) - LIST).toInt()
         mem.setU32(LIST_END, mem.u32(LIST_END) + 1)
         var last = 0xFF
         var p = LIST

@@ -46,6 +46,22 @@ object Units {
         return if (r != 0) r - 1 else fallback(ch)
     }
 
+    /**
+     * 0x44CB12(篩選, 單位)：陣營 +5（> 6 當 0；2 依格號：< 20 → 0、< 60 → 1）符合篩選：0–3 相同、4 我方（< 2）、
+     * 5 敵方（2、3）、6 全部。
+     */
+    fun countMatch(mem: EngineMemory, filter: Int, slot: Int): Boolean {
+        var v = mem.u8(unit(slot) + 5).let { if (it <= 6) it else 0 }
+        if (v == 2) v = when { slot < 0x14 -> 0; slot < 0x3C -> 1; else -> 2 }
+        return when (val f = filter and 0xff) {
+            in 0..3 -> v == f
+            4 -> v < 2
+            5 -> v == 2 || v == 3
+            6 -> true
+            else -> false
+        }
+    }
+
     /** 0x423FB9：健康狀態（+0x1E，4 組 2 bits）裡 v 的 bit 1–4 指定的組清除。 */
     fun clearHealth(mem: EngineMemory, u: Long, v: Int) {
         var mask = 0

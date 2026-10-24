@@ -31,6 +31,10 @@ class BattleField(
     val search by lazy { Search(this, gap) }
     /** 戰鬥能力值（0x43F5FF…）。 */
     val stats by lazy { CombatStats(this) }
+    /** 戰鬥公式（攻擊、防禦、傷害）。 */
+    val combat by lazy { Combat(this) }
+    /** 記一筆還沒移植的原版路徑。 */
+    fun gapNote(s: String) = gap(s)
     /** 攻擊範圍（0x43F8C0、0x436511）。 */
     val range by lazy { AttackRange(this) }
     /** 緩衝區 0x48B0E0：攻擊範圍的標記（+0 格號、+0xC80 只標記的旗標）。 */

@@ -94,6 +94,24 @@ class DamageTest {
     }
 
     @Test
+    fun attackDefenseMatch() {
+        val bad = ArrayList<String>()
+        var total = 0
+        forEachTest { s, stage, g, x ->
+            if (!x.getBoolean("ok")) return@forEachTest
+            val ad = x.optJSONArray("atkdef") ?: return@forEachTest
+            val a = x.getInt("attacker")
+            val b = x.getInt("target")
+            total++
+            val (atk, def) = s.field!!.combat.attackDefense(Units.unit(a), 0, Units.unit(b), 1, 0)
+            if (atk != ad.getLong(0) || def != ad.getLong(1))
+                bad += "S_%03d 組 $g 格 $a → $b：原版 (${ad.getLong(0)}, ${ad.getLong(1)}) 引擎 ($atk, $def)".format(stage)
+        }
+        println("攻擊／防禦：$total 筆")
+        if (bad.isNotEmpty()) fail("${bad.size} 筆不同：\n" + bad.take(25).joinToString("\n"))
+    }
+
+    @Test
     fun combatStatsMatch() {
         val bad = ArrayList<String>()
         var total = 0

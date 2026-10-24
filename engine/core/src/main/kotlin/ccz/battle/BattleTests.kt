@@ -314,18 +314,8 @@ class BattleTests(private val bf: BattleField, private val results: IntArray, pr
         if (!alive) results[RESULT_LOSE] = 1
     }
 
-    /** 0x44CB12。 */
-    private fun countMatch(filter: Int, slot: Int): Boolean {
-        var v = mem.u8(Units.unit(slot) + 5).let { if (it <= 6) it else 0 }
-        if (v == 2) v = when { slot < 0x14 -> 0; slot < 0x3C -> 1; else -> 2 }
-        return when (val f = filter and 0xff) {
-            in 0..3 -> v == f
-            4 -> v < 2
-            5 -> v == 2 || v == 3
-            6 -> true
-            else -> false
-        }
-    }
+    /** 0x44CB12（`Units.countMatch`）。 */
+    private fun countMatch(filter: Int, slot: Int): Boolean = Units.countMatch(mem, filter, slot)
 
     companion object {
         const val BATTLE = 0x4B3D08L

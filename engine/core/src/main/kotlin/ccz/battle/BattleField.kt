@@ -207,12 +207,13 @@ class BattleField(
     }
 
     /** 0x43FD34：+0x0D bit 0x08（單位圖左右翻轉，朝東時 1）。 */
-    private fun setFlip(u: Long, on: Boolean) {
+    fun setFlip(u: Long, on: Boolean) {
         mem.setU8(u + 0x0D, if (on) mem.u8(u + 0x0D) or 0x08 else mem.u8(u + 0x0D) and 0x08.inv())
     }
 
     /** 0x42DC72：佔位表 (x, y) = 格號（≥ 0xFA 或那格單位狀態 3 時寫 0xFF）。 */
-    private fun setOccupant(x: Int, y: Int, slot: Int) {
+    /** 0x42DC72(&位置, 格號)：佔位表寫格號（格號 < 0xFA 而且單位 +0x0C = 3 → 0xFF）。 */
+    fun setOccupant(x: Int, y: Int, slot: Int) {
         val v = if (slot >= 0xFA || mem.u8(unit(slot) + 0x0C) == 3) 0xFF else slot
         if (x < width && y < height) occupant[y * width + x] = v.toByte() else gap("0x42DC72 地圖外的座標")
     }
@@ -223,21 +224,62 @@ class BattleField(
     }
 
     /**
-     * 0x32 武将移动 在戰場上的暫代版（推測）：原版 0x4594EA 用移動執行 0x43AD3B 沿路走過去（還沒移植），
-     * 這裡直接放到目的地，朝向 = 指定的方向（0–3），沒指定時取移動方向；左右翻轉跟著朝向（東 = 翻轉）。
-     * 原版確定的部分：已經在目的地或目的地在地圖外就什麼都不做（回傳 false）；移動執行一開始先設成目前行動的單位（0x406240）。
+     * 0x4594EA：0x32 武将移动 在戰場上。單位不在場、已在目的地或目的地在地圖外 → 不動（回傳 false）。
+     * 暫時改成幽靈單位（+0x0D 清 6、設 0x80）、行動方式 0，目標點 = 0x41E6DF（從目的地附近找走得到的空格），
+     * 用 AI 執行器 0x43AD3B 走過去，再還原行動方式、旗標（翻轉 bit 3 除外）、目標點與目標；方向 0–3 時設朝向與翻轉（0x435829）。
      */
     fun scriptMove(slot: Int, x: Int, y: Int, dir: Int): Boolean {
         val u = unit(slot)
-        val fx = mem.u8(u + 6)
-        val fy = mem.u8(u + 7)
-        if ((fx == x && fy == y) || x >= width || y >= height) return false
-        setCurrent(slot)
-        if (fx != x || fy != y) mem.setU8(u + 0x0F, Direction.between(fx, fy, x, y).ordinal)
-        moveOnGrid(slot, x, y)
-        if (dir in 0..3) mem.setU8(u + 0x0F, dir)
-        setFlip(u, mem.u8(u + 0x0F) == 1)
+        if (mem.u8(u + 0x0C) != 2) return false
+        if ((mem.u8(u + 6) == x && mem.u8(u + 7) == y) || x >= width || y >= height) return false
+        val target = mem.u8(u + 8)
+        val mode = mem.u8(u + 0x0E)
+        val flags = mem.u8(u + 0x0D)
+        val goal = mem.u16(u + 9)
+        mem.setU8(u + 0x0D, (flags and 6.inv()) or 0x80)
+        setAction(u, 0)
+        val dest = reachableFree(u, x or (y shl 8))
+        setGoal(u, dest and 0xff, (dest shr 8) and 0xff)
+        ai.act(u)
+        setAction(u, mode)
+        mem.setU8(u + 0x0D, (mem.u8(u + 0x0D) and 0x80.inv()) or (flags and 0xF7))
+        setGoal(u, goal and 0xff, (goal shr 8) and 0xff)
+        mem.setU8(u + 8, target)
+        if (dir in 0..3) {
+            mem.setU8(u + 0x0F, dir)                                         // 0x406670
+            setFlip(u, dir == 1)                                             // 0x435829
+        }
         return true
+    }
+
+    /** 0x41E6DF(單位, 位置)：從單位搜到位置（模式 2，旗標 0）到得了而且沒人 → 位置；否則 0x43F07C 找附近的格再試。 */
+    private fun reachableFree(u: Long, p0: Int): Int {
+        var p = p0
+        val slot = mem.u8(u + 4)
+        repeat(0x100) {
+            if (search.search(u, 0xFF, 2, p, 0) != 0xFF && occupantAt(p) == 0xFF) return p
+            p = findPosition(p and 0xff, (p shr 8) and 0xff, slot, true)
+        }
+        gap("0x41E6DF 找不到位置")
+        return p
+    }
+
+    /** 0x44268C(x, y)：位置可以放（0x43FC7F）或在地圖內 → 目標點 +9 = (x, y)、目標武將 +8 = 0xFF。 */
+    private fun setGoal(u: Long, x: Int, y: Int) {
+        if (x < width && y < height || canStand(u, x or (y shl 8))) {
+            mem.setU8(u + 9, x)
+            mem.setU8(u + 0x0A, y)
+            mem.setU8(u + 8, 0xFF)
+        }
+    }
+
+    /** 0x43FC7F：格上沒人（或那格的單位 +0x0C = 1）而且地形能進入。 */
+    private fun canStand(u: Long, p: Int): Boolean {
+        val x = p and 0xff
+        val y = (p shr 8) and 0xff
+        val o = if (x < width && y < height) occupant[y * width + x].toInt() and 0xff else 0xFF
+        if (o != 0xFF && mem.u8(unit(o) + 0x0C) != 1) return false
+        return search.moveCost(u, search.terrainIn(p)).first != 0xFF
     }
 
     /** 0x406240：設成目前行動的單位：+0x24 清 bit 0x80，[0x4B5DF0] = 武將，[0x500AC0] = 單位位址。 */

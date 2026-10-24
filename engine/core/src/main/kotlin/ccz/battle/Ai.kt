@@ -17,6 +17,9 @@ class Ai(private val bf: BattleField) {
     private val search get() = bf.search
     private val combat get() = bf.combat
 
+    /** 上一次 [move] 走過的格（x | y << 8，含起點；給畫面播動畫）。 */
+    val walked = ArrayList<Int>()
+
     /** 戰場緩衝區 +0x1900：0x437E23 算出的路徑（從起點出發每一步的方向），長度在 [0x500C48]。 */
     val path: ByteArray get() = search.path
 
@@ -746,6 +749,251 @@ class Ai(private val bf: BattleField) {
             if (nb and 0xff == 0xFF) continue
             weight(nb, if (w > 10) w - 10 else w - 1, slot)
         }
+    }
+
+    // ---- 執行器 ----
+
+    /** 一次行動的結果：攻擊（策略 0xFF = 物理）的目標，沒有攻擊時 target = 0xFF。 */
+    data class Action(val strategy: Int, val target: Int, val steps: Int)
+
+    /**
+     * 0x43AD3B：電腦方單位的一次行動（行動方式 +0x0E：0／4 往目標、1 主動、2 堅守、3 被動）。決定位置與目標、走過去；
+     * 攻擊與策略的執行（0x43AAF7、0x41C0E8、0x467C9E）還沒移植，只回傳要做什麼。細節見 docs/battle.md「AI 執行器」。
+     */
+    fun act(u: Long): Action? {
+        val slot = slotOf(u)
+        val ghost = mem.u8(u + 0x0D) and 0x80 != 0
+        val limit = if (ghost) 0x64 else search.movePoints(u)
+        mem.setU8(AVOID, 0xFF)
+        mem.setU32(0x4B2C1CL, 0)
+        bf.setCurrent(slot)
+        mem.setU8(0x501BF9L, 0xFF)
+        val tgt = mem.u8(u + 8)
+        if (tgt != 0xFF && mem.u8(Units.unit(tgt) + 0x0C) != 2) {
+            mem.setU8(u + 8, 0xFF)
+            mem.setU8(u + 0x0E, 1)                                                     // 0x442669(1)
+        }
+        if (mem.u8(u + 0x0C) != 2 || mem.u8(u + 0x0D) and 2 != 0 || Units.health(mem, u, 8) != 0) {
+            mem.setU8(PATH_LENGTH, 0)
+            return null
+        }
+        prepare(u)
+        val here = pos(u)
+        if (mem.u8(0x4B2C24L) and 1 != 0 && !ghost && slot != 0x3C) {
+            // 低 HP 撤退：友軍往格 0（曹操）、其他往格 0x3C（在場時）
+            val dest = when {
+                effects.sideCategory(u) == 1 -> pos(Units.unit(0))
+                mem.u8(Units.unit(0x3C) + 0x0C) == 2 -> pos(Units.unit(0x3C))
+                else -> 0xFF
+            }
+            if (dest and 0xff != 0xFF) {
+                weight(dest, 0x0A, slot)
+                approach(u, dest, limit)
+            } else active(u, limit)
+        } else when (mem.u8(u + 0x0E)) {
+            0, 4 -> {
+                val t = mem.u8(u + 8)
+                val dest: Int
+                if (t != 0xFF) {
+                    val tu = Units.unit(t)
+                    dest = pos(tu)
+                    val tai = mem.u8(tu + 0x0E)
+                    if (tai == 0 || tai == 4) mem.setU16(AVOID, mem.u16(tu + 9).toLong())          // 0x41DFB9
+                } else dest = mem.u16(u + 9)
+                if (ghost) {
+                    if (search.search(u, 0xFF, 2, dest, 1) == 1) mem.setU16(BEST_POS, dest.toLong())
+                    else if (search.search(u, 0xFF, 2, dest, 0) != 0) mem.setU16(BEST_POS, dest.toLong())
+                    else {
+                        mem.setU16(BEST_POS, here.toLong())
+                        mem.setU16(u + 9, here.toLong())
+                    }
+                } else {
+                    val r = search.search(u, limit, 8, 0xFFFF, 1)
+                    if (t != 0xFF && r == t) {
+                        weight(dest, 0x14, slot)
+                        search.search(u, limit, 4, 0xFFFF, 1)
+                    } else {
+                        weight(dest, 0x0A, slot)
+                        approach(u, dest, limit)
+                    }
+                }
+            }
+            1 -> if (active(u, limit) == 0xFF && here == mem.u16(BEST_POS)) hold(u)
+            2 -> hold(u)
+            3 -> if (search.search(u, 0xFF, 8, 0xFFFF, 1) == 0xFF) hold(u) else passive(u, limit)
+        }
+        val steps = move(u)
+        arrived(u)
+        var action: Action? = Action(0xFF, 0xFF, steps)
+        val f = mem.u8(u + 0x0D)
+        if (f and 2 == 0 && f and 0x80 == 0 && mem.u8(u + 0x0E) != 4 && !special(u)) {
+            val st = mem.u8(BEST_STRATEGY)
+            action = Action(st, mem.u8(BEST_TARGET), steps)
+            if (st == 0xFF) bf.gapNote("0x43AAF7 AI 物理攻擊")
+            else {
+                bf.gapNote("0x41C0E8 AI 策略")
+                mem.setU8(0x501BF9L, 2)
+                if (st == 0x39) mem.setU32(0x4B420CL, 1)
+            }
+        }
+        if (!ghost && mem.u8(u + 0x0D) and 4 != 0) mem.setU8(u + 0x0D, mem.u8(u + 0x0D) or 2)     // 0x442718(2)
+        mem.setU8(PATH_LENGTH, 0)
+        return action
+    }
+
+    /**
+     * 往 [dest] 前進（0x43AD3B 裡重複的一段）：從 dest 反向搜尋到單位（旗標 1，不行再旗標 0），找得到就沿路走到移動力用完的地方
+     * （0x437E23 旗標 1）再在附近評估（模式 4）；找不到就照主動（0x43A7C9）。
+     */
+    private fun approach(u: Long, dest: Int, limit: Int) {
+        val here = pos(u)
+        val ok = search.search(u, 0xFF, 2, here, 1, dest) == 1 || search.search(u, 0xFF, 2, here, 0, dest) != 0xFF
+        if (ok) {
+            walkPath(u, dest, here, limit, 1)
+            search.search(u, limit, 4, 0xFFFF, 1)
+        } else active(u, limit)
+    }
+
+    /** 堅守（0x43B26F）：只評估原地（上限 0 的模式 4），位置 = 原位。 */
+    private fun hold(u: Long) {
+        search.search(u, 0, 4, 0xFFFF, 1)
+        mem.setU16(BEST_POS, pos(u).toLong())
+    }
+
+    /**
+     * 0x43A2AC：準備：每格攻擊標記（scratch +0）全設 0xFF，從每個不同方的在場敵人位置用自己的攻擊範圍（型態 0x0B 當 0）標記
+     * （0x436511 旗標 0：記敵人的格號）；有特效 (0x60, 0x7A) 的敵人再標四鄰。加權（+0x640）清 0。
+     * HP 低（0x439CFE）而且行動方式不是 2、4 時：回復地形（0x428A25 ≠ 0）加權 +0x32，[0x4B2C24] bit 0 設起來。最佳結果清掉。
+     */
+    fun prepare(u: Long) {
+        val side = effects.sideCategory(u)
+        var desc = bf.range.descriptor(u)
+        if (desc and 0xff == 0x0BL) desc = desc and 0xFFFFFF00L
+        val n = bf.width * bf.height
+        mem.setU8(0x4B2C24L, 0)
+        bf.scratch.fill(0xFF.toByte(), 0, n)
+        fun hostile(s: Int): Boolean {
+            val e = Units.unit(s)
+            return mem.u8(e + 0x0C) == 2 && effects.sideCategory(e) != side          // 0x43A289
+        }
+        for (s in 0 until 0xFA) if (hostile(s)) { val e = Units.unit(s); bf.range.collect(e, pos(e), desc, 0, 0) }
+        for (s in 0 until 0xFA) if (hostile(s)) {
+            val e = Units.unit(s)
+            if (effects.value(e, 0x60, 0x7A, 1, 1) != 0L) bf.range.collect(e, pos(e), 0, 0, 0)
+        }
+        bf.scratch.fill(0, 0x640, 0x640 + n)
+        val ai = mem.u8(u + 0x0E)
+        if (lowHealth(u) && ai != 2 && ai != 4) {
+            for (y in 0 until bf.height) for (x in 0 until bf.width) {
+                val t = search.terrainIn(x or (y shl 8))
+                if (t in 0x12..0x16) {                                                   // 0x428A25 → 0x41E467
+                    val i = 0x640 + y * bf.width + x
+                    bf.scratch[i] = (bf.scratch[i] + 0x32).toByte()
+                }
+            }
+            mem.setU8(0x4B2C24L, mem.u8(0x4B2C24L) or 1)
+        }
+        mem.setU8(BEST_SCORE, 0)
+        mem.setU8(BEST_TARGET, 0xFF)
+        mem.setU8(BEST_POS, 0xFF)
+        mem.setU8(BEST_STRATEGY, 0xFF)
+    }
+
+    /**
+     * 0x43A7C9(上限)：主動。移動範圍內有被標記的格（模式 8）→ [0x4B2C1C] = 1、模式 4 評估；最佳位置不是原位就結束
+     * （[0x500C47] ≠ 1 而且行動方式 < 4 時原位也結束）。否則不限距離找最近的標記格（模式 8）：沒有 → 留在原位（回傳 0xFF）；
+     * 有 → 從那個敵人的位置反向搜到單位（旗標 1、2，或友軍 0x40D917 能到曹操身邊），能到就沿路走、模式 4 評估。
+     * 回傳原版的 al（行動方式 1 用：0xFF 而且最佳位置是原位 → 改成堅守）。
+     */
+    private fun active(u: Long, limit: Int): Int {
+        val here = pos(u)
+        if (search.search(u, limit, 8, 0xFFFF, 1) != 0xFF) {
+            mem.setU32(0x4B2C1CL, 1)
+            search.search(u, limit, 4, 0xFFFF, 1)
+            if (here != mem.u16(BEST_POS)) return 0
+            if (mem.u8(0x500C47L) != 1 && mem.u8(u + 0x0E) < 4) return 0
+        }
+        val r = search.search(u, 0xFF, 8, 0xFFFF, 1)
+        if (r == 0xFF) {
+            mem.setU16(BEST_POS, here.toLong())
+            return 0xFF
+        }
+        val dest = pos(Units.unit(r))
+        val ok = search.search(u, 0xFF, 2, here, 1, dest) == 1 ||
+            search.search(u, 0xFF, 2, here, 2, dest) != 0xFF || towardLeader(u)
+        if (!ok) return 0
+        walkPath(u, dest, here, limit, 1)
+        return search.search(u, limit, 4, 0xFFFF, 1)
+    }
+
+    /** 0x40D917：友軍（+5 = 1）：從格 0 的位置反向搜到自己（旗標 1）。 */
+    private fun towardLeader(u: Long): Boolean {
+        if (mem.u8(u + 5) != 1) return false
+        return search.search(u, 0xFF, 2, pos(u), 1, pos(Units.unit(0))) == 1
+    }
+
+    /**
+     * 0x40DEBE(單位, 上限)：被動、有敵人進入範圍時：敵方行動中（[0x4B3D18] = 2）而且有行動範圍（+0x20 ≠ 0xFFFF）→
+     * 先在範圍限制內評估（旗標 3），最高分 ≥ 100 就用它；否則一般評估（旗標 1）。
+     */
+    private fun passive(u: Long, limit: Int) {
+        if (mem.u8(BattleTests.BATTLE + 0x10) == 2 && mem.u16(u + 0x20) != 0xFFFF) {
+            search.search(u, limit, 4, 0xFFFF, 3)
+            if (mem.u32(BEST_SCORE) >= 0x64) return
+        }
+        search.search(u, limit, 4, 0xFFFF, 1)
+    }
+
+    /**
+     * 0x43A959：走到最佳位置 [0x4B2C20]：路徑 0x437E23(原位, 最佳位置, 0xFF, 0)，0x43D9ED 一步一步走（每步設朝向，
+     * 陷阱 0x428B7A 會停下，還沒移植），走完佔位表更新、不是幽靈單位時 +0x0D bit 2（已移動）。回傳步數（寫 [0x500C48]）。
+     */
+    private fun move(u: Long): Int {
+        var steps = 0
+        walked.clear()
+        walked += pos(u)
+        val best = mem.u16(BEST_POS)
+        if (mem.u8(u + 0x0C) == 2 && best and 0xff != 0xFF && pos(u) != best) {
+            val p = walkPath(u, pos(u), best, 0xFF, 0)
+            if (p[0].toInt() and 0xff != 0xFF) {
+                val slot = slotOf(u)
+                val ghost = mem.u8(u + 0x0D) and 0x80 != 0
+                if (ghost) bf.gapNote("0x45503F 幽靈單位移動")
+                bf.setOccupant(mem.u8(u + 6), mem.u8(u + 7), 0xFF)
+                var i = 0
+                while (pos(u) != best && i < 0x100) {
+                    val d = p[i++].toInt() and 0xff
+                    val n = bf.neighbor(pos(u), d)
+                    if (n and 0xff == 0xFF) continue
+                    if (d <= 3) mem.setU8(u + 0x0F, d)                                         // 0x442000
+                    if (d == 1 || d == 3) bf.setFlip(u, d == 1)                                  // 0x43FD34
+                    mem.setU8(u + 6, n and 0xff)
+                    mem.setU8(u + 7, (n shr 8) and 0xff)
+                    walked += n
+                    if (search.trap(u, n)) break
+                }
+                steps = i
+                if (!ghost) mem.setU8(u + 0x0D, mem.u8(u + 0x0D) or 4)                    // 0x442718(4)
+                bf.setOccupant(mem.u8(u + 6), mem.u8(u + 7), slot)                          // 0x41BD67
+            }
+        }
+        mem.setU8(PATH_LENGTH, steps)
+        return steps
+    }
+
+    /** 0x43FCDF：沒有目標武將而且到了目標點（+9）時，行動方式 0／4 改成 3（被動）。 */
+    private fun arrived(u: Long) {
+        if (mem.u8(u + 8) != 0xFF) return
+        if (pos(u) != mem.u16(u + 9)) return
+        val ai = mem.u8(u + 0x0E)
+        if (ai == 0 || ai == 4) mem.setU8(u + 0x0E, 3)
+    }
+
+    /** 0x467C9E：特殊行動（[0x505FDC] = 0 而且 0x4225FB 成立時，兵種表 0x4D2200）。還沒移植，遇到時記 gap。 */
+    private fun special(u: Long): Boolean {
+        if (mem.u8(0x505FDCL) != 0 || mem.u8(0x505F6CL) != 0) return false
+        if (mem.u8(0x4D2200L + group(u)) != 0) bf.gapNote("0x467C9E 特殊行動")
+        return false
     }
 
     companion object {

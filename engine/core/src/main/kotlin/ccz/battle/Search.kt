@@ -168,7 +168,7 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
      * 0x428B7A(格, 0, 旗標)：我軍單位（+0x0D 沒有 0x80、+0x0E = 7）要看敵人的伏擊（0x428A53，特效 0x52），
      * 其他看格上的陷阱（0x4749B5，表 0x510000）。兩者都還沒移植：遇到時記 gap、當成沒有。
      */
-    private fun trap(u: Long, p: Int): Boolean {
+    fun trap(u: Long, p: Int): Boolean {
         val player = mem.u8(u + 0x0D) and 0x80 == 0 && mem.u8(u + 0x0E) == 7
         if (player && bf.occupantAt(p) == 0xFF) {
             val side = effects.sideCategory(u)
@@ -216,13 +216,12 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
     // ---- 搜尋 ----
 
     /**
-     * 0x438484(&單位+6, 上限, 模式, 目標, 旗標)：從單位位置逐層展開（每次處理花費等於目前層的格，下一層 = 新到的格裡最小的花費），
+     * 0x438484(&起點, 上限, 模式, 目標, 旗標)：從起點（通常是單位位置；AI 找路時從目的地反過來搜）逐層展開（每次處理花費等於目前層的格，下一層 = 新到的格裡最小的花費），
      * 結果在 [cost]。模式 2：到了目標就回傳 1；8：到了沒人的格而且那格被某個在場單位的攻擊範圍標記（scratch）→ 回傳那個單位；
      * 4：先清最佳結果、建策略清單（0x442A26），再對起點與每個到達的格評估（[Ai.evaluate]）。
      * 旗標 bit 0：要看 ZOC、不能穿過敵人；2：可以穿過敵人；3：不看 AI 行動範圍。回傳 0xFF = 沒有結果。
      */
-    fun search(u: Long, limit: Int, mode: Int = 0, target: Int = 0xFFFF, flag: Int = 1): Int {
-        val start = pos(u)
+    fun search(u: Long, limit: Int, mode: Int = 0, target: Int = 0xFFFF, flag: Int = 1, start: Int = pos(u)): Int {
         if (start == target) return 0xFF
         val w = bf.width
         val h = bf.height

@@ -37,6 +37,7 @@ class AiTest {
         var full = 0
         var skipped = 0
         var lists = 0
+        var acts = 0
         for (k in 0 until stages.length()) {
             val st = stages.getJSONObject(k)
             val stage = st.getInt("stage")
@@ -56,7 +57,7 @@ class AiTest {
                     hex(chars.getString(key)).forEachIndexed { i, b -> mem.setU8(a + i, b) }
                 }
                 val units = hex(grp.getString("units"))
-                hex(grp.getString("occupant")).forEachIndexed { i, b -> bf.occupant[i] = b.toByte() }
+                val occupant = hex(grp.getString("occupant"))
                 val tests = grp.getJSONArray("tests")
                 for (t in 0 until tests.length()) {
                     val x = tests.getJSONObject(t)
@@ -67,6 +68,7 @@ class AiTest {
                     val weights = hex(x.getString("weights"))
                     fun setup() {
                         units.forEachIndexed { i, b -> mem.setU8(Units.UNITS + i, b) }
+                        occupant.forEachIndexed { i, b -> bf.occupant[i] = b.toByte() }
                         for (i in 0 until n) { bf.scratch[i] = marks[i].toByte(); bf.scratch[0x640 + i] = weights[i].toByte() }
                         mem.setU16(Ai.AVOID, x.getLong("avoid"))
                         mem.setU32(0x48ECD4L, x.getLong("seed"))
@@ -116,6 +118,33 @@ class AiTest {
                         )
                         if (diffs.isNotEmpty()) bad += "$where 位置 %04x：$diffs".format(p)
                     }
+                    val ac = x.optJSONObject("act")
+                    if (ac != null && ac.getBoolean("ok")) {
+                        acts++
+                        setup()
+                        val action = bf.ai.act(u)
+                        val wantUnits = hex(ac.getString("units"))
+                        val unitDiff = (0 until wantUnits.size).firstOrNull { wantUnits[it] != mem.u8(Units.UNITS + it) }
+                        val occ = hex(ac.getString("occupant"))
+                        val best = hex(ac.getString("best"))
+                        // 0x4B2C3C、0x4B2C48 是 0x4359F5 的暫存（只寫不讀），不比
+                        val ignore = setOf(0x4B2C3C - 0x4B2C1C, 0x4B2C3D - 0x4B2C1C, 0x4B2C48 - 0x4B2C1C)
+                        val scores = hex(ac.getString("scores"))
+                        val calls = ac.getJSONArray("calls")
+                        val strat = (0 until calls.length()).map { calls.getJSONArray(it) }.firstOrNull { it.getString(0) == "strategy" }?.getInt(1) ?: 0xFF
+                        val misc = ac.getJSONArray("misc")
+                        val diffs = listOfNotNull(
+                            unitDiff?.let { "單位表 格 ${it / 0x30} +%02x 原版 %02x 引擎 %02x".format(it % 0x30, wantUnits[it], mem.u8(Units.UNITS + it)) },
+                            "佔位表".takeIf { (0 until n).any { occ[it] != (bf.occupant[it].toInt() and 0xff) } },
+                            ("全域 " + (0 until best.size).filter { it !in ignore && best[it] != mem.u8(0x4B2C1CL + it) }.joinToString { "%x:%02x/%02x".format(0x4B2C1C + it, best[it], mem.u8(0x4B2C1CL + it)) })
+                                .takeIf { (0 until best.size).any { it !in ignore && best[it] != mem.u8(0x4B2C1CL + it) } },
+                            "每格得分".takeIf { (0 until n).any { scores[it] != (bf.scratch[0x640 + it].toInt() and 0xff) } },
+                            "策略 $strat/${action?.strategy}".takeIf { strat != 0xFF && strat != action?.strategy },
+                            "0x501BF9 ${misc.getInt(0)}/${mem.u8(0x501BF9L)}".takeIf { misc.getInt(0) != mem.u8(0x501BF9L) },
+                            "亂數".takeIf { ac.getLong("seed") != mem.u32(0x48ECD4L) },
+                        )
+                        if (diffs.isNotEmpty()) bad += "$where 執行：$diffs"
+                    }
                     val fu = x.getJSONObject("full")
                     if (!fu.getBoolean("ok")) continue
                     if (!hasList && hex(fu.getString("strategies"))[0] != 0xFF) { skipped++; continue }
@@ -141,7 +170,7 @@ class AiTest {
                 }
             }
         }
-        println("AI 評估：策略清單 $lists、物理／策略得分 $tiles 格、模式 4 搜尋 $full 次（有策略略過 $skipped）")
+        println("AI 評估：策略清單 $lists、物理／策略得分 $tiles 格、模式 4 搜尋 $full 次（有策略略過 $skipped）、執行 $acts 次")
         if (bad.isNotEmpty()) fail("${bad.size} 筆不同：\n" + bad.take(30).joinToString("\n"))
         assertTrue(tiles > 0)
     }

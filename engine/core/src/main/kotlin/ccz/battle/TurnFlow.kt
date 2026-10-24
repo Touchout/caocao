@@ -54,13 +54,19 @@ class TurnFlow(private val bf: BattleField, private val gap: (String) -> Unit) {
         }
         if (mem.u8(PHASE_KIND) != 2) mem.setU8(PHASE_KIND, 0)
         phaseStart(0)
+        bf.rng.shuffle(0x508998L)                                     // 0x423490
+        if ((0 until 10).any { mem.u8(0x501AE4L + 3 * it) != 0xFF }) gap("0x40EC9D 計時的效果（0x501AE1）")
         mem.setU32(BATTLE + 0x520, 1)
         yield(Step.Player)
         mem.setU32(BATTLE + 0x520, 0)
         if (result == 0) computerPhase()
     }
 
-    /** 0x44E825：友軍（行動方 1）、敵軍（行動方 2，有提示、回合開始處理）依序；各自先檢查事件再行動。 */
+    /**
+     * 0x44E825：友軍（行動方 1，格 0–0x3B）、敵軍（行動方 2，格 0x3C–0xF9，有提示、回合開始處理）依序；各自先檢查事件再行動。
+     * 行動順序：兩輪（[0x500C47] = 0、1）× 優先度 p = 0…0xF9（單位 +0x0B）：每個 p 從頭找第一個在場、優先度 = p、
+     * 行動方式 ≠ 7、還沒行動（+0x0D 沒有 4、2）的單位行動（0x43AD3B），然後 p + 1（再行動時 p 不變）。行動後檢查事件。
+     */
     private suspend fun SequenceScope<Step>.computerPhase() {
         mem.setU32(BATTLE + 0x504, 0)
         for (k in 0..1) {
@@ -77,7 +83,46 @@ class TurnFlow(private val bf: BattleField, private val gap: (String) -> Unit) {
                 yield(Step.Events)
                 if (result != 0) break
             }
-            gap("0x44E825 電腦方行動（AI 0x43AD3B）")
+            gap("0x44DA7A 行動方開始的全體處理")
+            val (from, to) = if (k == 0) 0 to 0x3C else 0x3C to 0xFA
+            for (pass in 0..1) {
+                mem.setU8(0x500C47L, pass)
+                var p = 0
+                while (p < 0xFA && result == 0) {
+                    for (slot in from until to) {
+                        val u = Units.unit(slot)
+                        if (mem.u8(u + 0x0C) != 2 || mem.u8(u + 0x0B) != p || mem.u8(u + 0x0E) == 7) continue
+                        if (mem.u8(u + 0x0D) and 4 != 0 || mem.u8(u + 0x0D) and 2 != 0) continue
+                        if (mem.u8(0x4B4230L) and 4 == 0) {
+                            bf.setCurrent(slot)
+                            val fx = mem.u8(u + 6)
+                            val fy = mem.u8(u + 7)
+                            bf.ai.act(u)
+                            mem.setU16(0x500E9AL, 0)
+                            if (fx != mem.u8(u + 6) || fy != mem.u8(u + 7))
+                                yield(Step.Show(ScriptEvent.Moved(mem.u16(u), fx, fy, mem.u8(u + 6), mem.u8(u + 7), bf.ai.walked.toList())))
+                            if (mem.u8(u + 0x0D) and 2 != 0) gap("0x45B609 行動後的記錄")
+                        }
+                        gap("0x42BC14 行動後的狀態處理")
+                        if (mem.u8(u + 0x24) and 0x80 != 0) {                                  // 0x41B508 再行動
+                            mem.setU8(u + 0x24, mem.u8(u + 0x24) and 0x7F)
+                            if (mem.u8(u + 0x0C) == 2) {
+                                mem.setU8(u + 0x24, mem.u8(u + 0x24) + 1)
+                                mem.setU8(u + 0x0D, mem.u8(u + 0x0D) and 6.inv())             // 0x412D9D
+                                p--
+                            }
+                        } else gap("0x412D52 再行動特效")
+                        if (result == 0 && mem.u8(u + 0x0D) and 2 != 0) yield(Step.Events)
+                        break
+                    }
+                    if (mem.u32(BATTLE + 0x504) != 0L) {
+                        gap("0x44DA7A 行動方開始的全體處理")
+                        mem.setU32(BATTLE + 0x504, 0)
+                        p = -1
+                    }
+                    p++
+                }
+            }
         }
     }
 

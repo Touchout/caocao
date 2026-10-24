@@ -90,7 +90,9 @@ def load_signatures():
 
 
 class Original(EexEmu):
-    def __init__(self, exe, script, budget=200_000_000):
+    def __init__(self, exe, script, budget=None):
+        # 每條指令的預算；0x32 走 AI 執行器時可能要很多（環境變數 TRACE_BUDGET 可調）
+        budget = budget or int(os.environ.get("TRACE_BUDGET", 200_000_000))
         super().__init__(exe, budget=budget)
         self.data = script
         self.reads = []  # eexemu 的讀參數 hook 會寫這裡（看的是假 VM，這裡不用）

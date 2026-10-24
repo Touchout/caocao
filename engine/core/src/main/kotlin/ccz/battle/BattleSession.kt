@@ -162,6 +162,7 @@ class BattleSession(
                 mem.setIntVar(4051, 0)
                 val map = HexzMap.load(files, id)
                 // 原版：0x27 讓遊戲進入戰場狀態，劇本暫停，執行開戰初始化 0x44D2CA 後才繼續
+                mem.setU8(Effects.GAME_MODE, 3)                                     // 0x428346：遊戲狀態 = 戰場
                 val nf = BattleField(mem, map, rawCharacters) { vm.gaps.merge(it, 1, Int::plus) }
                 nf.init()
                 field = nf
@@ -199,14 +200,27 @@ class BattleSession(
             0x58 -> { val t = p[2].value; val x = p[3].value; val y = p[4].value; onBattle { it.map.setTerrain(x, y, t) } }
             // 战场转向设置（武將, 目標武將, 方向, 背對, ?, ?）：0x4575B8
             0x4F -> f?.turn(p[0].value, p[1].value, p[2].value, p[3].value)
-            // 武将移动（模式, 武將, 格, x, y, 方向）：原版在戰場上走 0x4594EA → 移動執行 0x43AD3B（還沒移植），暫代：直接放到目的地
-            0x32 -> if (f != null) {
-                vm.gaps.merge("0x32 戰場上的武將移動（0x4594EA → 0x43AD3B）", 1, Int::plus)
-                val u = battle!!.unitOf(p[1].value)
-                if (u != null && !u.hidden) {
-                    val (fx, fy) = u.x to u.y
-                    if (f.scriptMove(u.slot, p[3].value, p[4].value, p[5].value))
-                        events += ScriptEvent.Moved(u.character, fx, fy, p[3].value, p[4].value)
+            // 武将移动（模式, 武將, 格, x, y, 方向）：戰場上 0x4133B2 → 0x4594EA → AI 執行器 0x43AD3B 走過去。
+            // 模式 1：我軍出場格（< 0x14、在場）的武將（VM +0x2044 + 0x10 × 格）；模式 0（0xFFFF 當 0）：武將參數。
+            0x32 -> if (f != null && mem.u8(Effects.GAME_MODE) != 3) {
+                vm.gaps.merge("0x32 不在戰場狀態（0x429159）", 1, Int::plus)
+            } else if (f != null) {
+                val mode = p[0].value.let { if (it and 0xffff == 0xFFFF) 0 else it }
+                val slotP = p[2].value
+                val who = when (mode) {
+                    1 -> if (slotP in 0 until 0x14 && mem.u8(Units.unit(slotP) + 0x0C) == 2) mem.u16(0x494FD4L + 0x10L * slotP) else 0xFFFF
+                    0 -> p[1].value and 0xffff
+                    else -> 0xFFFF
+                }
+                val slot = if (who == 0xFFFF) -1 else Units.findUnit(mem, who) { c ->
+                    if (c == 0x401) { vm.gaps.merge("0x4594EA 武將 0x401（目前行動的單位）", 1, Int::plus); -1 }
+                    else Units.liveUnitOf(mem, c)
+                }
+                if (slot >= 0) {
+                    val um = Units.unit(slot)
+                    val (fx, fy) = mem.u8(um + 6) to mem.u8(um + 7)
+                    if (f.scriptMove(slot, p[3].value, p[4].value, p[5].value))
+                        events += ScriptEvent.Moved(mem.u16(um), fx, fy, mem.u8(um + 6), mem.u8(um + 7), f.ai.walked.toList())
                 }
             }
             // 隐藏武将出现（模式, 武將, 格）：0x414ADC

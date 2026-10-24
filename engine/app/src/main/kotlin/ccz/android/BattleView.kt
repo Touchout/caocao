@@ -149,7 +149,10 @@ class BattleView(
             }
             is ScriptEvent.Moved -> {
                 val u = b?.unitOf(e.character)
-                if (u != null && mapImage != null) animateWalk(u, straightPath(e.fromX, e.fromY, e.toX, e.toY)) { advance() }
+                if (u != null && mapImage != null) {
+                    val path = if (e.path.size >= 2) e.path.map { (it and 0xff) to ((it shr 8) and 0xff) } else straightPath(e.fromX, e.fromY, e.toX, e.toY)
+                    animateWalk(u, path) { advance() }
+                }
                 else advance()
             }
             is ScriptEvent.TurnStart -> {

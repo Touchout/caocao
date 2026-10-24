@@ -16,8 +16,12 @@ sealed interface ScriptEvent {
     /** 是非題（0x04 询问测试）：回答 1 = 是、0 = 否。 */
     data class YesNo(val param: Int) : ScriptEvent
 
-    /** 劇本移動了武將（0x32 武将移动），畫面可以播走路動畫；狀態已經更新。 */
-    data class Moved(val character: Int, val fromX: Int, val fromY: Int, val toX: Int, val toY: Int) : ScriptEvent
+    /**
+     * 武將移動了（0x32 武将移动、電腦方行動），畫面可以播走路動畫；狀態已經更新。
+     * [path] = 走過的格（x | y << 8，含起點），沒有時畫面自己畫直線。
+     */
+    data class Moved(val character: Int, val fromX: Int, val fromY: Int, val toX: Int, val toY: Int,
+                     val path: List<Int> = emptyList()) : ScriptEvent
 
     /** 回合／階段開始的提示（原版 0x44AC28）：turn 從 1 起，side 0 = 我軍、2 = 敵軍。 */
     data class TurnStart(val turn: Int, val side: Int) : ScriptEvent

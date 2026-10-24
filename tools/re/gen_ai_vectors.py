@@ -18,6 +18,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import trace_original as t  # noqa: E402
 from gen_range_vectors import call  # noqa: E402
+from unicorn import UC_HOOK_CODE  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EIP, UC_X86_REG_ESP  # noqa: E402
 
 SEARCH = 0x438484
 MOVE_POINTS = 0x43F74F
@@ -26,6 +28,10 @@ TERRAIN_VALUE = 0x452E18
 STRATEGY_LIST = 0x442A26
 STRATEGY_SCORE = 0x439169
 # 命中擲骰的狀態：命中累積表、序列表、計數器、累積表的組號
+EXECUTE = 0x43AD3B
+# 執行器裡還沒移植／只是畫面的函式：(位址, 彈掉的參數個數, 名稱)
+EXEC_STUBS = [(0x43AAF7, 0, "attack"), (0x41C0E8, 1, "strategy"), (0x441488, 3, "show"), (0x467C9E, 1, "special"),
+              (0x44A88A, 0, "redraw"), (0x42A5B5, 1, "redraw2"), (0x45503F, 2, "ghost")]
 ROLL_STATE = [(0x4930C8, 0x400), (0x508998, 0x100), (0x501BF5, 2), (0x4927F0, 0x10), (0x497AF8, 0x20)]
 SEED = 0x48ECD4
 ARG = t.HEAP + 0x3E0000     # 放指標參數（位置）的地方
@@ -168,7 +174,50 @@ def main(argv):
                         "cost": bytes(mu.mem_read(buf + 0x12C0, n)).hex(),
                         "strategies": bytes(mu.mem_read(0x4AC808, 0x40)).hex(),
                         "seed": struct.unpack("<I", mu.mem_read(SEED, 4))[0]}
-                tests.append({"unit": a, "rolls": {str(k): v.hex() for k, v in rolls.items()},
+                # 執行器 0x43AD3B（攻擊、策略、畫面換成記錄）
+                setup()
+                calls = []
+                hooks = []
+
+                def stub(addr, pops, name):
+                    def hook(mu, a_, size, user):
+                        esp = mu.reg_read(UC_X86_REG_ESP)
+                        words = struct.unpack("<4I", mu.mem_read(esp, 16))
+                        calls.append([name] + list(words[1:1 + pops]))
+                        mu.reg_write(UC_X86_REG_EAX, 0)
+                        mu.reg_write(UC_X86_REG_ESP, esp + 4 + 4 * pops)
+                        mu.reg_write(UC_X86_REG_EIP, words[0])
+                    hooks.append(mu.hook_add(UC_HOOK_CODE, hook, begin=addr, end=addr))
+
+                def face(mu, a_, size, user):
+                    # 0x442000(方向)：動畫一步，狀態上只有 +0x0F = 方向（≤ 3）與翻轉
+                    esp = mu.reg_read(UC_X86_REG_ESP)
+                    ret, d = struct.unpack("<II", mu.mem_read(esp, 8))
+                    if d & 0xFF <= 3:
+                        u_ = mu.reg_read(UC_X86_REG_ECX)
+                        mu.mem_write(u_ + 0xF, bytes([d & 0xFF]))
+                        if d & 0xFF in (1, 3):   # 0x43FD34：東 → 翻轉、西 → 不翻
+                            f_ = mu.mem_read(u_ + 0xD, 1)[0]
+                            mu.mem_write(u_ + 0xD, bytes([f_ | 8 if d & 0xFF == 1 else f_ & ~8 & 0xFF]))
+                    mu.reg_write(UC_X86_REG_ESP, esp + 8)
+                    mu.reg_write(UC_X86_REG_EIP, ret)
+                for addr, pops, name in EXEC_STUBS:
+                    stub(addr, pops, name)
+                hooks.append(mu.hook_add(UC_HOOK_CODE, face, begin=0x442000, end=0x442000))
+                mu.reg_write(UC_X86_REG_EAX, 0)
+                r = call(mu, EXECUTE, ua, count=2_000_000_000)
+                for hk in hooks:
+                    mu.hook_del(hk)
+                act = {"ok": r is not None, "calls": calls,
+                       "units": bytes(mu.mem_read(t.UNITS, 250 * 0x30)).hex(),
+                       "occupant": bytes(mu.mem_read(grid, n)).hex(),
+                       "best": bytes(mu.mem_read(0x4B2C1C, 0x34)).hex(),
+                       "scores": bytes(mu.mem_read(scratch + 0x640, n)).hex(),
+                       "misc": [mu.mem_read(0x501BF9, 1)[0], struct.unpack("<I", mu.mem_read(0x4B420C, 4))[0]],
+                       "seed": struct.unpack("<I", mu.mem_read(SEED, 4))[0]}
+                mu.mem_write(t.UNITS, bytes(units))
+                mu.mem_write(grid, bytes(occ))
+                tests.append({"unit": a, "act": act, "rolls": {str(k): v.hex() for k, v in rolls.items()},
                               "slist": slist[:slist.index(0xFF)].hex() if 0xFF in slist else slist.hex(), "marks": marks.hex(), "weights": weights.hex(), "avoid": avoid, "seed": seed,
                               "mp": mp, "tiles": tiles, "full": full})
             groups.append({"units": units.hex(), "occupant": occ.hex(),

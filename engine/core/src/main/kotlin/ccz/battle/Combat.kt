@@ -2,6 +2,7 @@ package ccz.battle
 
 import ccz.data.Characters
 import ccz.data.Equipment
+import ccz.data.Stats
 import ccz.script.EngineMemory
 
 /**
@@ -254,7 +255,316 @@ class Combat(private val bf: BattleField) {
 
     private fun pos(u: Long) = mem.u8(u + 6) or (mem.u8(u + 7) shl 8)
 
+    // ---- 物理傷害 ----
+
+    /** 原版回傳 (eax = 傷害（最多目標 HP）, ecx = 不限 HP 的傷害)。 */
+    data class Damage(val value: Long, val raw: Long)
+
+    private fun group(u: Long): Int = mem.u8(charPtr(u) + 0x2B).let { c -> when { c <= 0x3B -> c / 3; c < 0x50 -> c - 0x28; else -> 0x28 } }
+    private fun maxHp(u: Long) = Equipment.maxHp(mem, mem.u16(u))
+    private val rng get() = bf.rng
+
+    /** 0x42A9F7：v > t ? v − t : 0，結果 0 時 1。 */
+    private fun reduce(v: Long, t: Long): Long = (if (v > t) v - t else 0L).let { if (it == 0L) 1 else it }
+
+    /**
+     * 0x43BC5A(攻擊方, 目標, 估算, 旗標)：物理攻擊的傷害。估算 = 1 時是 AI 預估（不判定命中、沒有浮動與爆擊，[0x500E9A] = 2 時 ×1.5）。
+     * 流程見 docs/battle.md「物理傷害」。
+     */
+    fun damage(a: Long, t: Long, est: Int, flag: Int): Damage {
+        if (mem.u8(t + 4) == 0xFF) return Damage(0, 0)
+        var dmg: Long
+        val kill = instantKill(a, t)
+        if (kill != 0L) {
+            dmg = kill
+        } else {
+            val special = strategyValue(0x15)
+            var pct = 0L
+            var flat = false
+            if (special != 0) pct = special.toLong()
+            else {
+                val e = effects.value(a, 0x16, 0x1F, 1, 0)
+                if (e != 0L) { pct = e; flat = mem.u8(0x4CB6BFL) == 1 }
+            }
+            if (pct != 0L) {
+                dmg = if (flat) pct else percent(maxHp(t), pct)
+            } else {
+                val (atk, def) = attackDefense(a, 0, t, 1, 0)
+                if (est == 0 && !hit(a, t)) return Damage(0, 0)
+                dmg = (mem.u8(charPtr(a) + 0x2C) + 0x19).toLong()
+                dmg = if (atk >= def) dmg + (atk - def) / 5
+                    else Stats.satSub(dmg, (def - atk) / 5).let { if (it == 0L) 1 else it }
+                val slow = effects.value(a, 0x75, 0x4C, 1, 0)
+                if (slow != 0L) {
+                    val diff = (bf.search.movePoints(t) - slow) and M
+                    if ((diff and 0xff).toByte() < 0) dmg = (dmg + percent((-diff and M) * 5 and M, dmg)) and M
+                }
+                val m = matchup(t, a)
+                if (m != 100L) dmg = percent(m, dmg).let { if (it == 0L) 1 else it }
+                if (group(a) <= 0x27 && mem.u8(MATCHUP_FLAG + group(a)) != 0) {                     // 0x4281AF
+                    val e = effects.value(t, 0x22, 0x45, 1, 0)
+                    if (e != 0L) dmg = reduce(dmg, percent(e, dmg))
+                }
+                dmg = knockback(t, a, dmg)
+                val e1 = effects.value(a, 0x19, 0x5F, 1, 0)
+                val c = mem.u8(0x500C48L)
+                if (e1 != 0L && c != 0) dmg = (dmg + percent((e1 * c) and M, dmg)) and M
+                val e2 = effects.value(t, 0x23, 0x3D, 1, 0)
+                if (e2 != 0L) dmg = reduce(dmg, percent(e2, dmg))
+                if (flag == 0) {
+                    val e3 = effects.value(a, 0x2C, 0x4A, 1, 0)
+                    if (e3 != 0L) dmg = (dmg + percent((e3 * mem.u8(ACTED + mem.u8(a + 4))) and M, dmg)) and M
+                } else if (effects.value(a, 0x48, 0x6A, 1, 1) == 0L) {
+                    dmg = ((dmg * 3) and M ushr 2).let { if (it == 0L) 1 else it }
+                }
+                dmg = variance(a, dmg, t, est)
+                if (est == 0) dmg = critical(a, dmg, t)
+            }
+            val cap = effects.value(t, 0x56, 0x72, 1, 0)                                     // 0x43C3F0
+            if (cap != 0L && cap < dmg) dmg = cap
+        }
+        if (est != 0 && mem.u8(0x500E9AL) == 2) dmg = (dmg + percent(dmg, 0x32)) and M     // 0x406B0E
+        val hp = mem.u32(t + 0x10)
+        return Damage(if (dmg > hp) hp else dmg, dmg)
+    }
+
+    /** 0x43637B：攻擊方有特效 (0x6E, 0x7D) 時，目標 HP ≤ HP 上限 × 值% → 傷害 = 目標 HP（一擊必殺）。 */
+    private fun instantKill(a: Long, t: Long): Long {
+        val e = effects.value(a, 0x6E, 0x7D, 1, 0)
+        if (e == 0L) return 0
+        val q = percent(maxHp(t), e)
+        val hp = mem.u32(t + 0x10)
+        return if (hp > q) 0 else hp
+    }
+
+    /** 0x436334([0x500E9B], id)：正在用的策略 = [id] 時取策略資料（0x4A7510 + 16·id）+0x0F，否則 0。 */
+    private fun strategyValue(id: Int): Int {
+        val s = mem.u8(0x500E9BL)
+        if (s == 0 || s != id) return 0
+        return mem.u8(0x4A7510L + 16L * s + 0x0F)
+    }
+
+    /**
+     * 0x426737(目標, 攻擊方)：兵種相剋表 0x4D1A80[攻擊方系別 × 40 + 目標系別] + 攻擊方特效 (0x76, 0x4E) − 目標的，最少 0。
+     */
+    private fun matchup(t: Long, a: Long): Long {
+        var v = mem.u8(MATCHUP + group(a) * 0x28L + group(t)).toLong()
+        v += effects.value(a, 0x76, 0x4E, 1, 0)
+        v -= effects.value(t, 0x76, 0x4E, 1, 0)
+        return if (v.toInt() < 0) 0 else v and M
+    }
+
+    /**
+     * 0x411072(0, 目標, 攻擊方)：特殊策略 0x16、攻擊方特效 (0x62, 0x35) 的值、或特效 (0x61, 0x35) 時：
+     * [0x500E9A] = 1 或目標不健康（HP 0 或健康狀態第 2 組）→ +30%（特效 0x62 時加它的值%）；
+     * 否則看擊退：目標往離開攻擊方的方向一格，地圖內、沒有單位、進得去 → 不加；擋住 → +30%。
+     */
+    private fun knockback(t: Long, a: Long, dmg: Long): Long {
+        var pct: Long
+        if (strategyValue(0x16) != 0) pct = -1
+        else {
+            val e = effects.value(a, 0x62, 0x35, 0, 0)
+            if (e and 0xff != 0L) return (dmg + percent(dmg, e)) and M
+            if (effects.value(a, 0x61, 0x35, 1, 1) == 0L) return dmg
+            pct = -1
+        }
+        if (pct < 0) {
+            val unhealthy = mem.u32(t + 0x10) == 0L || (mem.u8(t + 0x1E) shr 4) and 3 != 0
+            if (mem.u8(0x500E9AL) == 1 || unhealthy) return (dmg + percent(dmg, 0x1E)) and M
+            val tp = pos(t)
+            val ap = pos(a)
+            fun step(av: Int, tv: Int) = when { av == tv -> 0; av < tv -> 1; else -> -1 }
+            val nx = ((tp and 0xff) + step(ap and 0xff, tp and 0xff)) and 0xff
+            val ny = (((tp shr 8) and 0xff) + step((ap shr 8) and 0xff, (tp shr 8) and 0xff)) and 0xff
+            val np = nx or (ny shl 8)
+            val free = nx < bf.width && ny < bf.height && bf.occupantAt(np) == 0xFF &&
+                bf.moveCost(np, mem.u8(t + 4)) < 0xFE
+            if (!free) return (dmg + percent(dmg, 0x1E)) and M
+        }
+        return dmg
+    }
+
+    /**
+     * 0x412C78(攻擊方, 傷害, 目標, 估算)：方向加成 0x408DB1；估算時到此為止。
+     * 否則 0x41D716（迷霧裡看不到的目標 × 80%）與亂數浮動：r = 亂數 % 7，> 2 → + (r − 2)，否則 − r（最少 1）。
+     */
+    private fun variance(a: Long, dmg0: Long, t: Long, est: Int): Long {
+        var dmg = direction(a, t, dmg0)
+        if (est == 1) return dmg
+        dmg = fog(a, t, dmg)
+        val r = rng.below(7)
+        return if (r > 2) (dmg + r - 2) and M else Stats.satSub(dmg, r.toLong()).let { if (it == 0L) 1 else it }
+    }
+
+    /**
+     * 0x408DB1：[0x505F88] ≠ 0 時依目標朝向與攻擊方位置（AI 預估時用 [0x48E8C2]）：同一行／列 +5%，背後 +10%；
+     * 目標不是我方而且 [0x500E9A] = 1 時再 +5%。
+     */
+    private fun direction(a: Long, t: Long, dmg0: Long): Long {
+        var dmg = dmg0
+        if (mem.u32(0x505F88L) != 0L) {
+            val ap = if (mem.u8(a + 0x0E) == 7 || mem.u16(ALT_POS) == 0xFFFF) pos(a) else mem.u16(ALT_POS)
+            val ax = ap and 0xff
+            val ay = (ap shr 8) and 0xff
+            val d = mem.u8(t + 0x0F)
+            val k = if (d and 1 == 0) {
+                val ty = mem.u8(t + 7)
+                when {
+                    ty == ay -> 1
+                    ty > ay -> if (d == 2) 2 else 0
+                    else -> if (d == 0) 2 else 0
+                }
+            } else {
+                val tx = mem.u8(t + 6)
+                when {
+                    tx == ax -> 1
+                    tx > ax -> if (d == 3) 0 else 2
+                    else -> if (d == 1) 0 else 2
+                }
+            }
+            dmg = (dmg + percent(dmg, (k * 5).toLong())) and M
+        }
+        if (effects.sideCategory(t) != 1 && mem.u8(0x500E9AL) == 1) dmg = (dmg + percent(dmg, 5)) and M
+        return dmg
+    }
+
+    /**
+     * 0x41D716：迷霧（[0x505FDC] = 0、[0x501BD2] ≥ 2）而且兩方的視野類別（0x4088B4）不同時，
+     * 目標所在格的可見表 0x4934B0 & (目標類別 2 → 0x0D，否則 0x0E) = 0 → ×80%。
+     */
+    private fun fog(a: Long, t: Long, dmg: Long): Long {
+        if (mem.u8(0x505FDCL) != 0 || mem.u8(0x501BD2L) < 2) return dmg
+        fun view(u: Long) = if (mem.u8(u + 4) < 0x3C || mem.u8(u + 5) == 5) 1 else 2           // 0x4088B4
+        val vt = view(t)
+        val va = view(a)
+        if (vt == va) return dmg
+        val mask = if (vt == 2) 0x0D else 0x0E
+        if (mem.u8(VISIBLE + mem.u8(t + 7) * bf.width + mem.u8(t + 6)) and mask != 0) return dmg
+        return percent(dmg, 0x50)
+    }
+
+    /**
+     * 0x42423D：攻擊方特效 (0x6F, 0x48, 3) 的 bit 0 → 爆擊：+ 目標 HP 上限 × (序列表 0 的下一個值 / 20 + 10)%（計數器 0x501BF5）。
+     */
+    private fun critical(a: Long, dmg: Long, t: Long): Long {
+        if (effects.value(a, 0x6F, 0x48, 3, 0) and 1L == 0L) return dmg
+        val max = maxHp(t)
+        val roll = rng.sequence(0, 0x501BF5L)
+        return (dmg + percent(max, (roll / 20 + 10).toLong())) and M
+    }
+
+    // ---- 命中 ----
+
+    /**
+     * 0x43B4B6(目標, 1, 0xFF)：物理攻擊命中。命中率 0x43B623 ≥ 100 → 命中；[0x505EC8] > 1 時：命中率 ≥ 它 → 命中、
+     * < [0x505EC4] → 不中。否則最多擲兩次（0x4287A8），第一次不中而且命中率 ≥ 85 時用命中率 − 10 再擲一次。
+     */
+    fun hit(a: Long, t: Long): Boolean {
+        var rate = hitRate(a, t)
+        if (rate >= 0x64) return true
+        val th = mem.u32(0x505EC8L)
+        if (th > 1) {
+            if (rate >= th) return true
+            if (rate < mem.u32(0x505EC4L)) return false
+        }
+        for (k in 0 until 2) {
+            val r = roll(rate.toInt(), 1)
+            if (mem.u32(0x505EC8L) == 1L || r) return r
+            if (rate < 0x55) return false
+            rate -= 10
+        }
+        return false
+    }
+
+    /**
+     * 0x43B623：[0x500E9A] = 2、或攻擊方 0x47EF3D 不成立、或目標麻痺 → 100。否則 0x43B53A(爆發攻防)，
+     * 特效 (0x1E, 0x24) → 100；特效 (0x1F, 0x7E) 加（最多 100）；目標特效 (0x20, 0x29) 減；0x408EEE 方向等修正。
+     */
+    fun hitRate(a: Long, t: Long): Long {
+        if (mem.u8(0x500E9AL) == 2) return 0x64
+        if (!canEvade(a, t)) return 0
+        if (mem.u8(t + 0x1E) and 3 != 0) return 0x64
+        val (atk, def) = attackDefense(a, 3, t, 3, 0)
+        var r = ratio(atk, def)
+        if (effects.value(a, 0x1E, 0x24, 1, 1) != 0L) return 0x64
+        val up = effects.value(a, 0x1F, 0x7E, 1, 0)
+        if (up != 0L) r = (r + up).toInt().let { if (it > 0x64) 0x64 else it }.toLong() and M
+        val down = effects.value(t, 0x20, 0x29, 1, 0)
+        if (down != 0L) r = Stats.satSub(r, down)
+        return adjustRate(a, t, r)
+    }
+
+    /** 0x47EF3D：攻擊方系別在表 0x4D2138 有值而且目標有特效 (0x2F, 0x4E) → 不成立（0x43B623 回傳 0）。 */
+    private fun canEvade(a: Long, t: Long): Boolean {
+        val g = group(a)
+        if (g > 0x27 || mem.u8(MATCHUP_FLAG + g) == 0) return true
+        return effects.value(t, 0x2F, 0x4E, 1, 1) == 0L
+    }
+
+    /** 0x43B53A(攻, 防)：攻 ≥ 2 防 → 100；攻 ≥ 防 → 90 + (攻 − 防) × 10 / 防；攻 ≥ 防 / 2 → 60 + …×30 / (防 / 2)；否則 30 + …。 */
+    private fun ratio(atk: Long, def: Long): Long = when {
+        atk >= (def shl 1 and M) -> 0x64
+        atk >= def -> ((Stats.satSub(atk, def) * 10 and M) / def) + 0x5A
+        atk >= def ushr 1 -> (def ushr 1).let { h -> ((Stats.satSub(atk, h) * 0x1E and M) / h) + 0x3C }
+        else -> (def / 3).let { q -> ((Stats.satSub(atk, q) * 0x1E and M) / q) + 0x1E }
+    }
+
+    /** 0x408EEE(攻擊方, 目標, 命中率)：+ 方向加成（0x408DB1 只取加成），最多 100；− 目標特效 (0x21, 0x22)（最少 1）。 */
+    private fun adjustRate(a: Long, t: Long, r0: Long): Long {
+        val bonus = direction(a, t, r0) - r0
+        var r = (r0 + bonus).toInt().let { if (it > 0x64) 0x64 else it }.toLong() and M
+        r = Stats.satSub(r, effects.value(t, 0x21, 0x22, 1, 0))
+        return if (r == 0L) 1 else r
+    }
+
+    /**
+     * 0x4287A8(命中率, 類別)：命中累積表 0x4930C8（依 [0x4927F0]／[0x497AF8] 的組 × 4 + 類別 % 16）加命中率，滿 100 命中。
+     * 結果在 [0x505EC8] ≠ 1 時改用 0x43786B（序列表或真亂數）；[0x505FDC] ≠ 0 時直接 0x43786B。
+     */
+    private fun roll(rate: Int, type: Int): Boolean {
+        if (mem.u8(0x505FDCL) != 0) return chanceRoll(rate, 0)
+        val hi = type / 16
+        val lo = type % 16
+        val odd = lo and 1
+        val (table, idx) = if (hi == 1) 0x497AF8L to (if (odd != 0) 0x0C else 1) else 0x4927F0L to odd
+        val cell = mem.u8(table + idx) * 4 + lo
+        var dl = mem.u8(ACCUM + cell)
+        var r = false
+        var store = true
+        if (odd == 1) {
+            dl = (dl + 0x64 - rate) and 0xff
+            if (dl >= 0x64) dl -= 0x64 else r = true
+        } else {
+            dl = (dl + rate) and 0xff
+            if (dl >= 0x64) { r = true; dl -= 0x64 }
+            if (type == 0 && mem.u8(0x492DF8L).toByte() >= 1) store = false
+        }
+        if (store) mem.setU8(ACCUM + cell, dl)
+        if (mem.u8(0x505EC8L) == 1) return r
+        return chanceRoll(rate, 0)
+    }
+
+    /** 0x43786B(機率, 方式)：[0x505FB4] < 2 而且方式 ≠ 2 → 序列表 [0x505FB4]（計數器 0x501BF6）的值 ≤ 機率；否則真亂數。 */
+    private fun chanceRoll(rate: Int, mode: Int): Boolean {
+        val k = mem.u8(0x505FB4L)
+        if (mode == 2 || k >= 2) return rng.chance(rate and 0xff)
+        val v = rng.sequence(k, 0x501BF6L)
+        val p = if (rate and 0xff >= 0x64) 0x64 else rate and 0xff
+        return if (mode == 1) v >= 0x64 - p else p >= v
+    }
+
     companion object {
         private const val M = 0xFFFFFFFFL
+        /** 兵種相剋表（系別 × 40 + 系別）。 */
+        private const val MATCHUP = 0x4D1A80L
+        /** 0x4281AF：系別 → 是否吃「特效 0x22 減傷」、0x47EF3D 的判斷。 */
+        private const val MATCHUP_FLAG = 0x4D2138L
+        private const val ALT_POS = 0x48E8C2L
+        /** 每格一個 byte（0x420952 清除；特效 0x2C 的倍數）。 */
+        private const val ACTED = 0x508A00L
+        /** 命中累積表。 */
+        private const val ACCUM = 0x4930C8L
+        /** 迷霧的可見表（0x4934B0）。 */
+        private const val VISIBLE = 0x4934B0L
     }
 }

@@ -31,6 +31,8 @@ class BattleField(
     val search by lazy { Search(this, gap) }
     /** 戰鬥能力值（0x43F5FF…）。 */
     val stats by lazy { CombatStats(this) }
+    /** 原版亂數（[0x48ECD4]）。 */
+    val rng by lazy { Rng(mem) }
     /** 戰鬥公式（攻擊、防禦、傷害）。 */
     val combat by lazy { Combat(this) }
     /** 記一筆還沒移植的原版路徑。 */
@@ -272,7 +274,7 @@ class BattleField(
     private fun canPlace(p: Int, slot: Int): Boolean = occupantAt(p) == 0xFF && moveCost(p, slot) != 0xFF
 
     /** 0x45936D：單位 [slot] 進入格 p 的移動消耗（地圖矩形限制、地形、兵種；不能進入時看特效 54 穿越移動）。 */
-    private fun moveCost(p: Int, slot: Int): Int {
+    fun moveCost(p: Int, slot: Int): Int {
         if (!insideRect(p)) return 0xFF
         val ch = mem.u32(unit(slot)).toInt()
         val cls = mem.u8(Characters.addr(mem, ch) + 0x2B)

@@ -94,6 +94,30 @@ class DamageTest {
     }
 
     @Test
+    fun damageMatch() {
+        val bad = ArrayList<String>()
+        var total = 0
+        var zero = 0
+        forEachTest { s, stage, g, x ->
+            if (!x.getBoolean("ok")) return@forEachTest
+            val a = x.getInt("attacker")
+            val b = x.getInt("target")
+            val args = x.getJSONArray("args")
+            s.mem.setU32(0x48ECD4L, x.getLong("seed"))
+            total++
+            val d = s.field!!.combat.damage(Units.unit(a), Units.unit(b), args.getInt(0), args.getInt(1))
+            val want = x.getLong("eax")
+            if (want == 0L) zero++
+            val seed = s.mem.u32(0x48ECD4L)
+            if (d.value != want || seed != x.getLong("seed_after"))
+                bad += "S_%03d 組 $g 格 $a → $b 參數 ${args}：原版 $want 引擎 ${d.value}%s".format(stage,
+                    if (seed != x.getLong("seed_after")) "（亂數狀態不同）" else "")
+        }
+        println("物理傷害：$total 筆（0 的 $zero 筆）")
+        if (bad.isNotEmpty()) fail("${bad.size} 筆不同：\n" + bad.take(25).joinToString("\n"))
+    }
+
+    @Test
     fun attackDefenseMatch() {
         val bad = ArrayList<String>()
         var total = 0

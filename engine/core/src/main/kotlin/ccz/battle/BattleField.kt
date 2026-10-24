@@ -29,6 +29,8 @@ class BattleField(
     val effects by lazy { Effects(this) }
     /** 移動力、移動花費、移動範圍（0x43F74F、0x43F7B8、0x438484）。 */
     val search by lazy { Search(this, gap) }
+    /** 戰鬥能力值（0x43F5FF…）。 */
+    val stats by lazy { CombatStats(this) }
 
     val width get() = mem.u8(MAP_WIDTH)
     val height get() = mem.u8(MAP_HEIGHT)

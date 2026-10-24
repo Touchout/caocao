@@ -102,7 +102,7 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
      * 0x407BF6(地形 − 30)：我軍、k = 2、[0x48E8C2] = 0xFFFF → 單位位置；k = 1 → [0x48E8C2]；
      * 其他看 [0x505F84]：0 → 單位位置，否則 [0x48E8C2]。
      */
-    private fun positionFor(u: Long, k: Int): Int = when {
+    fun positionFor(u: Long, k: Int): Int = when {
         mem.u8(u + 0x0E) == 7 || k == 2 || mem.u16(ALT_POS) == 0xFFFF -> pos(u)
         k == 1 || mem.u32(0x505F84L) != 0L -> mem.u16(ALT_POS)
         else -> pos(u)

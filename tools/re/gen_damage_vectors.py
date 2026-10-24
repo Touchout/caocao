@@ -17,6 +17,7 @@ import trace_original as t  # noqa: E402
 from gen_range_vectors import call  # noqa: E402
 
 DAMAGE = 0x43BC5A
+STAT_FNS = [0x43F5FF, 0x43F62B, 0x43F657, 0x43F683, 0x43F6AF]
 SEED = 0x48ECD4      # 亂數 0x47FAE7 的狀態（LCG：× 0x41C64E6D + 0x3039，取 bit 16–30）
 STAGES = [0, 2, 8, 14, 22, 40, 52, 70, 99, 118]
 
@@ -40,6 +41,9 @@ def main(argv):
         base_grid = bytes(mu.mem_read(grid, 0x640))
         base_chars = bytes(mu.mem_read(chars, 1024 * 0x48))
         onmap = [s for s in range(250) if base_units[s * 0x30 + 0x0C] == 2 and struct.unpack_from("<H", base_units, s * 0x30)[0] != 0xFFFF]
+        if len(onmap) < 2:
+            print(f"S_{stage:03d}：地圖上不到兩個單位，略過", file=sys.stderr)
+            continue
         classes = sorted({base_chars[(struct.unpack_from("<H", base_units, s * 0x30)[0] & 0xFFF) * 0x48 + 0x2B] for s in onmap})
         groups = []
         for g in range(per):
@@ -89,12 +93,14 @@ def main(argv):
             tests = []
             snapshot = bytes(mu.mem_read(t.UNITS, 250 * 0x30))
             for a, b, est, flag in pairs:
+                # 分層比對：攻守雙方的 5 項戰鬥能力（0x414CCB 的函式表 0x440151 → 0x43F5FF…）
+                stats = [[call(mu, f, t.UNITS + x * 0x30) for f in STAT_FNS] for x in (a, b)]
                 seed = rnd.randrange(1 << 32)
                 mu.mem_write(SEED, struct.pack("<I", seed))
                 r = call(mu, DAMAGE, t.UNITS + a * 0x30, t.UNITS + b * 0x30, est, flag)
                 after = bytes(mu.mem_read(t.UNITS, 250 * 0x30))
                 tests.append({"attacker": a, "target": b, "args": [est, flag], "ok": r is not None, "eax": r,
-                              "seed": seed, "seed_after": struct.unpack("<I", mu.mem_read(SEED, 4))[0],
+                              "stats": stats, "seed": seed, "seed_after": struct.unpack("<I", mu.mem_read(SEED, 4))[0],
                               "changed": after != snapshot})
                 mu.mem_write(t.UNITS, snapshot)
             groups.append({"units": units.hex(), "occupant": occ.hex(),

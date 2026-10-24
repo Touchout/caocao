@@ -102,20 +102,26 @@ object Equipment {
         return x
     }
 
-    /** 0x452825（項目 5、6）：表 0x4CB6C0 標成百分比時 = 基礎值 × v / 100（32 位元），否則 v。 */
-    private fun scaled(mem: EngineMemory, character: Int, stat: Int, v: Long): Long {
+    /**
+     * 0x452825：表 0x4CB6C0 標成百分比時 = 基礎值 × v / 100（32 位元），否則 v。基礎值：項目 0–4 = 戰鬥能力 word，
+     * 0x436E02 成立時改用它算的成長總和（[growth] 回傳；null = 不成立）；5 = HP dword；6 = MP word。
+     */
+    private fun scaled(mem: EngineMemory, character: Int, stat: Int, v: Long, growth: ((Int) -> Long?)?): Long {
         if (stat >= 7 || mem.u8(PERCENT_STAT + stat) != 2) return v
         val r = Characters.addr(mem, character)
         val base = when (stat) {
+            in 0..4 -> growth?.invoke(stat) ?: mem.u16(r + 0x11 + 2 * stat).toLong()
             5 -> mem.u32(r + 0x1B)
-            6 -> mem.u16(r + 0x1F).toLong()
-            else -> return v // 項目 0–4 走 0x436E02，還沒移植（呼叫端只用 5、6）
+            else -> mem.u16(r + 0x1F).toLong()
         }
         return ((base * v) and 0xffffffffL) / 100
     }
 
-    /** 0x407C29：裝備給能力項目 [stat]（目前只用 5 HP、6 MP）的加成。 */
-    fun bonus(mem: EngineMemory, character: Int, stat: Int): Long {
+    /**
+     * 0x407C29：裝備給能力項目 [stat] 的加成（武器、防具的數值與特效，輔助）。
+     * 項目 0–4 的百分比加成要 0x436E02（戰場的特效判定），由 [growth] 提供。
+     */
+    fun bonus(mem: EngineMemory, character: Int, stat: Int, growth: ((Int) -> Long?)? = null): Long {
         val r = Characters.addr(mem, character)
         var sum = 0L
         for (k in 0..1) {
@@ -123,10 +129,10 @@ object Equipment {
             if (id == 0xFF) continue
             val level = mem.u8(r + 0x2F + 3 * k)
             if (applies(mem, stat, id)) sum += value(mem, id, level)
-            if (levelsOdd(mem, id) && effectStat(mem, id) == stat) sum += scaled(mem, character, stat, effectValue(mem, id, level))
+            if (levelsOdd(mem, id) && effectStat(mem, id) == stat) sum += scaled(mem, character, stat, effectValue(mem, id, level), growth)
         }
         val aux = mem.u8(r + 0x34)
-        if (aux != 0xFF && kindStat(mem, aux) == stat) sum += scaled(mem, character, stat, mem.u8(item(aux) + 0x15).toLong())
+        if (aux != 0xFF && kindStat(mem, aux) == stat) sum += scaled(mem, character, stat, mem.u8(item(aux) + 0x15).toLong(), growth)
         return sum and 0xffffffffL
     }
 

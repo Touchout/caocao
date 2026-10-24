@@ -31,6 +31,10 @@ class BattleField(
     val search by lazy { Search(this, gap) }
     /** 戰鬥能力值（0x43F5FF…）。 */
     val stats by lazy { CombatStats(this) }
+    /** 攻擊範圍（0x43F8C0、0x436511）。 */
+    val range by lazy { AttackRange(this) }
+    /** 緩衝區 0x48B0E0：攻擊範圍的標記（+0 格號、+0xC80 只標記的旗標）。 */
+    val scratch = ByteArray(0x1900)
 
     val width get() = mem.u8(MAP_WIDTH)
     val height get() = mem.u8(MAP_HEIGHT)

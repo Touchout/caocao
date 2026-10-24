@@ -124,6 +124,12 @@ class Effects(private val bf: BattleField) {
         return itemValue(charPtr, code, mode)
     }
 
+    /** 0x43C794（給其他模組用）。 */
+    fun itemsOnly(charPtr: Long, code: Int, presence: Int, mode: Int): Long = items(charPtr, code, presence, mode)
+
+    /** 0x4079DA（給其他模組用）。 */
+    fun hasItemCode(charPtr: Long, code: Int): Boolean = hasCode(charPtr, code)
+
     /** 0x4079DA：武器、防具（0x40B4E1 成立時）看 +0x14，輔助看 +0x11。 */
     private fun hasCode(charPtr: Long, code: Int): Boolean {
         for (k in 0 until 3) {

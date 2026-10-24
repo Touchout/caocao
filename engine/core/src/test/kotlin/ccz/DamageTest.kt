@@ -57,6 +57,43 @@ class DamageTest {
     }
 
     @Test
+    fun attackRangeMatch() {
+        val bad = ArrayList<String>()
+        var total = 0
+        forEachTest { s, stage, g, x ->
+            if (!x.getBoolean("ok")) return@forEachTest
+            val r = x.optJSONObject("range") ?: return@forEachTest
+            val f = s.field!!
+            val mem = s.mem
+            val a = x.getInt("attacker")
+            val u = Units.unit(a)
+            val n = f.width * f.height
+            total++
+            val want = r.optLong("desc", -1)
+            val desc = f.range.descriptor(u)
+            if (desc != want) { bad += "S_%03d 組 $g 格 $a：範圍型態 原版 %x 引擎 %x".format(stage, want, desc); return@forEachTest }
+            for (i in 0 until n) { f.search.cost[i] = 0xFE.toByte(); f.scratch[i] = 0xFE.toByte(); f.scratch[0xC80 + i] = 0xFE.toByte() }
+            mem.setU8(0x4B2C28L, r.getInt("prefer"))
+            val pos = mem.u8(u + 6) or (mem.u8(u + 7) shl 8)
+            val ret = f.range.collect(u, pos, desc, r.getInt("flags"), r.getInt("only"))
+            val list = StringBuilder()
+            var p = 0x4AC748L
+            while (mem.u8(p) != 0xFF && p < 0x4AC748L + 256) { list.append("%02x".format(mem.u8(p))); p++ }
+            fun hex(b: ByteArray, off: Int) = (0 until n).joinToString("") { "%02x".format(b[off + it].toInt() and 0xff) }
+            val diffs = listOfNotNull(
+                ("回傳 ${r.optInt("ret")} / $ret").takeIf { r.optInt("ret") != ret },
+                ("清單 ${r.getString("list")} / $list").takeIf { r.getString("list") != list.toString() && r.getInt("only") == 0 },
+                "花費表".takeIf { r.getString("cost") != hex(f.search.cost, 0) },
+                "標記".takeIf { r.getString("marks") != hex(f.scratch, 0) },
+                "只標記旗標".takeIf { r.getString("flags2") != hex(f.scratch, 0xC80) },
+            )
+            if (diffs.isNotEmpty()) bad += "S_%03d 組 $g 格 $a 型態 %x 旗標 ${r.getInt("flags")} 只標記 ${r.getInt("only")}：%s".format(stage, desc, diffs)
+        }
+        println("攻擊範圍：$total 筆")
+        if (bad.isNotEmpty()) fail("${bad.size} 筆不同：\n" + bad.take(25).joinToString("\n"))
+    }
+
+    @Test
     fun combatStatsMatch() {
         val bad = ArrayList<String>()
         var total = 0

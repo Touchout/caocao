@@ -15,8 +15,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import trace_original as t  # noqa: E402
 from gen_range_vectors import call  # noqa: E402
+from unicorn.x86_const import UC_X86_REG_EDX  # noqa: E402
 
 DAMAGE = 0x43BC5A
+ATK_DEF = 0x40D2AB
+RANGE_DESC = 0x43F8C0
+RANGE_COLLECT = 0x436511
 STAT_FNS = [0x43F5FF, 0x43F62B, 0x43F657, 0x43F683, 0x43F6AF]
 SEED = 0x48ECD4      # 亂數 0x47FAE7 的狀態（LCG：× 0x41C64E6D + 0x3039，取 bit 16–30）
 STAGES = [0, 2, 8, 14, 22, 40, 52, 70, 99, 118]
@@ -36,6 +40,8 @@ def main(argv):
         w, h = mu.mem_read(0x4B422C, 2)
         buf = struct.unpack("<I", mu.mem_read(0x48B140 + 0xC, 4))[0]
         grid = buf + 0xC80
+        battle_buf = buf
+        scratch_buf = struct.unpack("<I", mu.mem_read(0x48B0E0 + 0xC, 4))[0]
         chars = struct.unpack("<I", mu.mem_read(t.CHARS_PTR, 4))[0]
         base_units = bytes(mu.mem_read(t.UNITS, 250 * 0x30))
         base_grid = bytes(mu.mem_read(grid, 0x640))
@@ -95,12 +101,31 @@ def main(argv):
             for a, b, est, flag in pairs:
                 # 分層比對：攻守雙方的 5 項戰鬥能力（0x414CCB 的函式表 0x440151 → 0x43F5FF…）
                 stats = [[call(mu, f, t.UNITS + x * 0x30) for f in STAT_FNS] for x in (a, b)]
+                # 攻擊／防禦 0x40D2AB(攻擊方, 0, 目標, 1, 0)：edx = 攻擊、eax = 防禦
+                d_ = call(mu, ATK_DEF, t.UNITS + a * 0x30, t.UNITS + a * 0x30, 0, t.UNITS + b * 0x30, 1, 0)
+                atkdef = [mu.reg_read(UC_X86_REG_EDX), d_] if d_ is not None else None
+                # 攻擊範圍：型態 0x43F8C0、展開 0x436511(&位置, 型態, 旗標, 只標記)；標記前把兩張表填 0xFE
+                desc = call(mu, RANGE_DESC, t.UNITS + a * 0x30)
+                rflags = rnd.choice([0, 1, 2, 3, 0x80, 0x81])
+                ronly = 1 if rnd.random() < 0.15 else 0
+                mu.mem_write(battle_buf + 0x12C0, b"\xfe" * (w * h))
+                mu.mem_write(scratch_buf, b"\xfe" * (w * h))
+                mu.mem_write(scratch_buf + 0xC80, b"\xfe" * (w * h))
+                prefer = rnd.choice([0xFF] + onmap)
+                mu.mem_write(0x4B2C28, bytes([prefer]))
+                rr = call(mu, RANGE_COLLECT, t.UNITS + a * 0x30, t.UNITS + a * 0x30 + 6, desc or 0, rflags, ronly)
+                lst = bytes(mu.mem_read(0x4AC748, 256))
+                rng = {"desc": desc, "flags": rflags, "only": ronly, "prefer": prefer, "ret": rr,
+                       "list": lst[:lst.index(0xFF)].hex() if 0xFF in lst else lst.hex(),
+                       "cost": bytes(mu.mem_read(battle_buf + 0x12C0, w * h)).hex(),
+                       "marks": bytes(mu.mem_read(scratch_buf, w * h)).hex(),
+                       "flags2": bytes(mu.mem_read(scratch_buf + 0xC80, w * h)).hex()}
                 seed = rnd.randrange(1 << 32)
                 mu.mem_write(SEED, struct.pack("<I", seed))
                 r = call(mu, DAMAGE, t.UNITS + a * 0x30, t.UNITS + b * 0x30, est, flag)
                 after = bytes(mu.mem_read(t.UNITS, 250 * 0x30))
                 tests.append({"attacker": a, "target": b, "args": [est, flag], "ok": r is not None, "eax": r,
-                              "stats": stats, "seed": seed, "seed_after": struct.unpack("<I", mu.mem_read(SEED, 4))[0],
+                              "stats": stats, "atkdef": atkdef, "range": rng, "seed": seed, "seed_after": struct.unpack("<I", mu.mem_read(SEED, 4))[0],
                               "changed": after != snapshot})
                 mu.mem_write(t.UNITS, snapshot)
             groups.append({"units": units.hex(), "occupant": occ.hex(),

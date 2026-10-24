@@ -37,6 +37,8 @@ class BattleField(
     val combat by lazy { Combat(this) }
     /** 記一筆還沒移植的原版路徑。 */
     fun gapNote(s: String) = gap(s)
+    /** 電腦方的行動評估（0x43A55E…）。 */
+    val ai by lazy { Ai(this) }
     /** 攻擊範圍（0x43F8C0、0x436511）。 */
     val range by lazy { AttackRange(this) }
     /** 緩衝區 0x48B0E0：攻擊範圍的標記（+0 格號、+0xC80 只標記的旗標）。 */

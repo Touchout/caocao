@@ -261,7 +261,7 @@ class Combat(private val bf: BattleField) {
     data class Damage(val value: Long, val raw: Long)
 
     private fun group(u: Long): Int = mem.u8(charPtr(u) + 0x2B).let { c -> when { c <= 0x3B -> c / 3; c < 0x50 -> c - 0x28; else -> 0x28 } }
-    private fun maxHp(u: Long) = Equipment.maxHp(mem, mem.u16(u))
+    fun maxHp(u: Long) = Equipment.maxHp(mem, mem.u16(u))
     private val rng get() = bf.rng
 
     /** 0x42A9F7：v > t ? v − t : 0，結果 0 時 1。 */
@@ -495,7 +495,7 @@ class Combat(private val bf: BattleField) {
     }
 
     /** 0x47EF3D：攻擊方系別在表 0x4D2138 有值而且目標有特效 (0x2F, 0x4E) → 不成立（0x43B623 回傳 0）。 */
-    private fun canEvade(a: Long, t: Long): Boolean {
+    fun canEvade(a: Long, t: Long): Boolean {
         val g = group(a)
         if (g > 0x27 || mem.u8(MATCHUP_FLAG + g) == 0) return true
         return effects.value(t, 0x2F, 0x4E, 1, 1) == 0L

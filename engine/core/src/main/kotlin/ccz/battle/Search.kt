@@ -14,6 +14,8 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
 
     /** 搜尋結果的花費表（原版戰場緩衝區 +0x12C0）：每格累計花費，0xFF = 沒到過。 */
     val cost = ByteArray(0x640)
+    /** 戰場緩衝區 +0x1900：路徑（0x437E23 寫入；搜尋開始時第一格設 0xFF）。 */
+    val path = ByteArray(0x100)
 
     private fun unit(slot: Int) = Units.unit(slot)
     private fun charPtr(unit: Long) = Characters.addr(mem, mem.u16(unit))
@@ -59,7 +61,7 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
     }
 
     /** 0x435991：地圖內的地形，外面 0xFF。 */
-    private fun terrainIn(p: Int): Int =
+    fun terrainIn(p: Int): Int =
         if ((p and 0xff) < bf.width && ((p shr 8) and 0xff) < bf.height) terrainAt(p) else 0xFF
 
     /**
@@ -215,19 +217,29 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
 
     /**
      * 0x438484(&單位+6, 上限, 模式, 目標, 旗標)：從單位位置逐層展開（每次處理花費等於目前層的格，下一層 = 新到的格裡最小的花費），
-     * 結果在 [cost]。模式 2：到了目標就回傳 1；8：到了旁邊有單位的空格就回傳那個單位（原版另一張表，還沒移植）；
-     * 4：每格評估攻擊（0x405DA7，還沒移植）。旗標 bit 0：要看 ZOC、不能穿過敵人。回傳 0xFF = 沒有結果。
+     * 結果在 [cost]。模式 2：到了目標就回傳 1；8：到了沒人的格而且那格被某個在場單位的攻擊範圍標記（scratch）→ 回傳那個單位；
+     * 4：先清最佳結果、建策略清單（0x442A26），再對起點與每個到達的格評估（[Ai.evaluate]）。
+     * 旗標 bit 0：要看 ZOC、不能穿過敵人；2：可以穿過敵人；3：不看 AI 行動範圍。回傳 0xFF = 沒有結果。
      */
     fun search(u: Long, limit: Int, mode: Int = 0, target: Int = 0xFFFF, flag: Int = 1): Int {
         val start = pos(u)
         if (start == target) return 0xFF
         val w = bf.width
         val h = bf.height
+        if (mem.u8(0x500ACEL) != 0) gap("0x438484 [0x500ACE] 模式")
+        path[0] = 0xFF.toByte()
         cost.fill(0xFF.toByte())
         cost[index(start)] = 0
         val zocFlag = flag and 1
         val ghost = mem.u8(u + 0x0D) and 0x80 != 0                         // 0x425AF0(0x80)
-        if (mode and 4 != 0) { gap("0x438484 模式 4（攻擊評估 0x405DA7）"); return 0xFF }
+        if (mode and 4 != 0) {
+            mem.setU8(0x4B2C4CL, 0)
+            mem.setU8(0x4B2C28L, 0xFF)
+            mem.setU8(0x4B2C20L, 0xFF)
+            mem.setU8(0x4B2C44L, 0xFF)
+            bf.ai.buildStrategies(u)
+            if (!ghost) bf.ai.evaluate(u, start)
+        }
         if (moveCost(u, terrainIn(start)).first == 0xFF) return 0xFF
         var level = 0
         var progress = true
@@ -250,7 +262,7 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
                         if (cost[i].toInt() and 0xff != 0xFF) continue
                         val sc = moveCost(u, terrainIn(n)).first
                         if (sc == 0xFF || sc + c > limit) continue
-                        if (limit != 0xFF && mode != 0 && flag != 3) { gap("0x4077F6 AI 行動範圍限制"); }
+                        if (limit != 0xFF && mode != 0 && flag != 3 && !bf.ai.withinLimits(u, n)) continue
                         val o = bf.occupant[i].toInt() and 0xff
                         if (o != 0xFF && flag != 2 && !passThrough(u) && hostile(u, unit(o))) {
                             if (zocFlag == 1 || !ghost) continue
@@ -263,8 +275,12 @@ class Search(private val bf: BattleField, private val gap: (String) -> Unit) {
                                 if (!zoc(u, n)) next = if (v > nextMin) nextMin else v
                             } else next = v
                         }
-                        if (mode and 8 != 0 && bf.occupantAt(n) == 0xFF) gap("0x438484 模式 8")
+                        if (mode and 8 != 0 && bf.occupantAt(n) == 0xFF) {
+                            val m = bf.scratch[i].toInt() and 0xff
+                            if (m != 0xFF && mem.u8(unit(m) + 0x0C) == 2) return m
+                        }
                         if (mode and 2 != 0 && n == target) return 1
+                        if (mode and 4 != 0) bf.ai.evaluate(u, n)
                     }
                 }
                 if (!progress) {

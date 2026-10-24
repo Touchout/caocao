@@ -18,6 +18,13 @@ object Units {
 
     fun unit(slot: Int): Long = UNITS + SIZE.toLong() * slot
 
+    /** 0x423FE8(mask)：健康狀態 +0x1E 的第 i 組（2 bits）在 mask bit i+1 有選時，回傳第一個非 0 的組值；都沒有 0。 */
+    fun health(mem: EngineMemory, u: Long, mask: Int): Int {
+        val h = mem.u8(u + 0x1E)
+        for (i in 0 until 4) if ((mask shr (i + 1)) and 1 != 0 && (h shr (2 * i)) and 3 != 0) return (h shr (2 * i)) and 3
+        return 0
+    }
+
     /**
      * 0x41B882：武將參數 → 單位。≥ 0x404 = 格號 − 0x404（空格回傳 -1）；[0x505EFC] ≠ 0 且 < 0xFA 時也當格號；
      * 其他回傳 0（呼叫端再用武將編號找）。找到時回傳格號 + 1。

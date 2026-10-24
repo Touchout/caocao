@@ -23,6 +23,10 @@ SEARCH = 0x438484
 MOVE_POINTS = 0x43F74F
 PHYSICAL = 0x438914
 TERRAIN_VALUE = 0x452E18
+STRATEGY_LIST = 0x442A26
+STRATEGY_SCORE = 0x439169
+# 命中擲骰的狀態：命中累積表、序列表、計數器、累積表的組號
+ROLL_STATE = [(0x4930C8, 0x400), (0x508998, 0x100), (0x501BF5, 2), (0x4927F0, 0x10), (0x497AF8, 0x20)]
 SEED = 0x48ECD4
 ARG = t.HEAP + 0x3E0000     # 放指標參數（位置）的地方
 STAGES = [0, 2, 8, 14, 22, 40, 52, 70, 99, 118]
@@ -111,6 +115,17 @@ def main(argv):
                 weights = bytes(rnd.choice([0] * 8 + [rnd.randrange(1, 40)]) for _ in range(n))
                 avoid = 0xFFFF if rnd.random() < 0.7 else rnd.randrange(w) | (rnd.randrange(h) << 8)
                 seed = rnd.randrange(1 << 32)
+                rolls = {}
+                for addr, size in ROLL_STATE:
+                    if addr == 0x4930C8:
+                        b = bytes(rnd.randrange(100) for _ in range(size))
+                    elif addr == 0x508998:
+                        b = bytes(rnd.randrange(1, 101) for _ in range(size))
+                    elif addr == 0x501BF5:
+                        b = bytes(rnd.randrange(0x34) for _ in range(size))
+                    else:
+                        b = bytes(mu.mem_read(addr, size))
+                    rolls[addr] = b
 
                 def setup():
                     mu.mem_write(t.UNITS, bytes(units))
@@ -121,32 +136,40 @@ def main(argv):
                     mu.mem_write(0x500E49, b"\0" * 0x80)   # 擴散記錄（只給動畫用），比對前清 0
                     mu.mem_write(0x500C48, b"\0")          # 路徑長度（沒有目標時不會重算）
                     mu.mem_write(buf + 0x1900, b"\0" * 0x40)
+                    for addr, b in rolls.items():
+                        mu.mem_write(addr, b)
                 setup()
                 mp = call(mu, MOVE_POINTS, ua) & 0xFF
                 call(mu, SEARCH, ua, ua + 6, mp, 0, 0xFF, 0xFF, 1)
                 cost = bytes(mu.mem_read(buf + 0x12C0, n))
                 reach = [i for i in range(n) if cost[i] != 0xFF]
+                mu.mem_write(0x4AC808, b"\xff" * 0x90)   # 原版回傳結尾指標，由呼叫端寫 0xFF
+                call(mu, STRATEGY_LIST, 0, ua, 2, 0x4AC808)
+                slist = bytes(mu.mem_read(0x4AC808, 0x90))
                 tiles = []
                 for i in rnd.sample(reach, min(len(reach), 6)):
                     p = (i % w) | ((i // w) << 8)
                     mu.mem_write(ARG, struct.pack("<I", p))
                     r = call(mu, PHYSICAL, ua, ARG)
                     tv = call(mu, TERRAIN_VALUE, ua, ARG)
+                    sv = call(mu, STRATEGY_SCORE, ua, ARG, 0, count=500_000_000)
+                    sbest = bytes(mu.mem_read(0x4B2C2C, 0x18)).hex()
                     plen = mu.mem_read(0x500C48, 1)[0]
                     tiles.append({"pos": p, "ok": r is not None, "eax": r, "target": mu.mem_read(0x4B2C30, 1)[0],
                                   "plen": plen, "path": bytes(mu.mem_read(buf + 0x1900, 0x40)).hex(),
-                                  "spread": bytes(mu.mem_read(0x500E49, 0x80)).hex(), "terrain": tv,
+                                  "spread": bytes(mu.mem_read(0x500E49, 0x80)).hex(), "terrain": tv, "strat": sv, "sbest": sbest,
                                   "seed": struct.unpack("<I", mu.mem_read(SEED, 4))[0]})
                 # 整個模式 4 搜尋
                 setup()
-                r = call(mu, SEARCH, ua, ua + 6, mp, 4, 0xFF, 0xFF, 1)
+                r = call(mu, SEARCH, ua, ua + 6, mp, 4, 0xFF, 0xFF, 1, count=2_000_000_000)
                 full = {"ok": r is not None, "eax": r,
                         "best": bytes(mu.mem_read(0x4B2C20, 0x30)).hex(),
                         "scores": bytes(mu.mem_read(scratch + 0x640, n)).hex(),
                         "cost": bytes(mu.mem_read(buf + 0x12C0, n)).hex(),
                         "strategies": bytes(mu.mem_read(0x4AC808, 0x40)).hex(),
                         "seed": struct.unpack("<I", mu.mem_read(SEED, 4))[0]}
-                tests.append({"unit": a, "marks": marks.hex(), "weights": weights.hex(), "avoid": avoid, "seed": seed,
+                tests.append({"unit": a, "rolls": {str(k): v.hex() for k, v in rolls.items()},
+                              "slist": slist[:slist.index(0xFF)].hex() if 0xFF in slist else slist.hex(), "marks": marks.hex(), "weights": weights.hex(), "avoid": avoid, "seed": seed,
                               "mp": mp, "tiles": tiles, "full": full})
             groups.append({"units": units.hex(), "occupant": occ.hex(),
                            "chars": {str(ch): cdata[ch * 0x48:ch * 0x48 + 0x48].hex() for ch in changed}, "tests": tests})

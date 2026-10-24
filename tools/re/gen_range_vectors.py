@@ -25,7 +25,7 @@ BATTLE_BUF = 0x48B140
 STAGES = [0, 2, 4, 6, 8, 11, 12, 14, 15, 16, 19, 22, 38, 39, 40, 42, 47, 52, 53, 54, 58, 70, 85, 93, 99, 107, 110, 112, 113, 114, 117, 118]
 
 
-def call(mu, va, ecx, *args):
+def call(mu, va, ecx, *args, count=100_000_000):
     esp = STACK + 0x80000
     for a in reversed(args):
         esp -= 4
@@ -36,7 +36,7 @@ def call(mu, va, ecx, *args):
     mu.reg_write(UC_X86_REG_EBP, esp + 0x100)
     mu.reg_write(UC_X86_REG_ECX, ecx)
     try:
-        mu.emu_start(va, RET_MAGIC, count=100_000_000)
+        mu.emu_start(va, RET_MAGIC, count=count)
     except UcError:
         return None
     if mu.reg_read(UC_X86_REG_EIP) != RET_MAGIC:

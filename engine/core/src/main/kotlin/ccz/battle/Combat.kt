@@ -388,7 +388,7 @@ class Combat(private val bf: BattleField) {
      * 0x412C78(攻擊方, 傷害, 目標, 估算)：方向加成 0x408DB1；估算時到此為止。
      * 否則 0x41D716（迷霧裡看不到的目標 × 80%）與亂數浮動：r = 亂數 % 7，> 2 → + (r − 2)，否則 − r（最少 1）。
      */
-    private fun variance(a: Long, dmg0: Long, t: Long, est: Int): Long {
+    fun variance(a: Long, dmg0: Long, t: Long, est: Int): Long {
         var dmg = direction(a, t, dmg0)
         if (est == 1) return dmg
         dmg = fog(a, t, dmg)
@@ -444,10 +444,10 @@ class Combat(private val bf: BattleField) {
     }
 
     /**
-     * 0x42423D：攻擊方特效 (0x6F, 0x48, 3) 的 bit 0 → 爆擊：+ 目標 HP 上限 × (序列表 0 的下一個值 / 20 + 10)%（計數器 0x501BF5）。
+     * 0x42423D(傷害, 目標, mask)：攻擊方特效 (0x6F, 0x48, 3) & mask（物理 1、策略 2）→ 爆擊：+ 目標 HP 上限 × (序列表 0 的下一個值 / 20 + 10)%（計數器 0x501BF5）。
      */
-    private fun critical(a: Long, dmg: Long, t: Long): Long {
-        if (effects.value(a, 0x6F, 0x48, 3, 0) and 1L == 0L) return dmg
+    fun critical(a: Long, dmg: Long, t: Long, mask: Int = 1): Long {
+        if (effects.value(a, 0x6F, 0x48, 3, 0) and mask.toLong() == 0L) return dmg
         val max = maxHp(t)
         val roll = rng.sequence(0, 0x501BF5L)
         return (dmg + percent(max, (roll / 20 + 10).toLong())) and M
@@ -502,7 +502,7 @@ class Combat(private val bf: BattleField) {
     }
 
     /** 0x43B53A(攻, 防)：攻 ≥ 2 防 → 100；攻 ≥ 防 → 90 + (攻 − 防) × 10 / 防；攻 ≥ 防 / 2 → 60 + …×30 / (防 / 2)；否則 30 + …。 */
-    private fun ratio(atk: Long, def: Long): Long = when {
+    fun ratio(atk: Long, def: Long): Long = when {
         atk >= (def shl 1 and M) -> 0x64
         atk >= def -> ((Stats.satSub(atk, def) * 10 and M) / def) + 0x5A
         atk >= def ushr 1 -> (def ushr 1).let { h -> ((Stats.satSub(atk, h) * 0x1E and M) / h) + 0x3C }
@@ -510,7 +510,7 @@ class Combat(private val bf: BattleField) {
     }
 
     /** 0x408EEE(攻擊方, 目標, 命中率)：+ 方向加成（0x408DB1 只取加成），最多 100；− 目標特效 (0x21, 0x22)（最少 1）。 */
-    private fun adjustRate(a: Long, t: Long, r0: Long): Long {
+    fun adjustRate(a: Long, t: Long, r0: Long): Long {
         val bonus = direction(a, t, r0) - r0
         var r = (r0 + bonus).toInt().let { if (it > 0x64) 0x64 else it }.toLong() and M
         r = Stats.satSub(r, effects.value(t, 0x21, 0x22, 1, 0))
@@ -521,7 +521,7 @@ class Combat(private val bf: BattleField) {
      * 0x4287A8(命中率, 類別)：命中累積表 0x4930C8（依 [0x4927F0]／[0x497AF8] 的組 × 4 + 類別 % 16）加命中率，滿 100 命中。
      * 結果在 [0x505EC8] ≠ 1 時改用 0x43786B（序列表或真亂數）；[0x505FDC] ≠ 0 時直接 0x43786B。
      */
-    private fun roll(rate: Int, type: Int): Boolean {
+    fun roll(rate: Int, type: Int): Boolean {
         if (mem.u8(0x505FDCL) != 0) return chanceRoll(rate, 0)
         val hi = type / 16
         val lo = type % 16

@@ -36,6 +36,7 @@ class AiTest {
         var tiles = 0
         var full = 0
         var skipped = 0
+        var lists = 0
         for (k in 0 until stages.length()) {
             val st = stages.getJSONObject(k)
             val stage = st.getInt("stage")
@@ -72,11 +73,22 @@ class AiTest {
                         for (i in 0 until 0x80) mem.setU8(0x500E49L + i, 0)
                         mem.setU8(Ai.PATH_LENGTH, 0)
                         bf.ai.path.fill(0, 0, 0x40)
+                        val rolls = x.optJSONObject("rolls")
+                        if (rolls != null) for (key in rolls.keys()) hex(rolls.getString(key)).forEachIndexed { i, b -> mem.setU8(key.toLong() + i, b) }
                     }
                     setup()
                     val mp = bf.search.movePoints(u)
                     if (mp != x.getInt("mp")) { bad += "$where：移動力 原版 ${x.getInt("mp")} 引擎 $mp"; continue }
                     bf.search.search(u, mp, 0, 0xFFFF, 1)
+                    val hasList = x.has("slist")
+                    if (hasList) {
+                        bf.ai.buildStrategies(u)
+                        val got = StringBuilder()
+                        var q = Ai.STRATEGIES
+                        while (mem.u8(q) != 0xFF) got.append("%02x".format(mem.u8(q++)))
+                        if (got.toString() != x.getString("slist")) { bad += "$where：策略清單 ${x.getString("slist")}/$got"; continue }
+                        lists++
+                    }
                     val tl = x.getJSONArray("tiles")
                     for (i in 0 until tl.length()) {
                         val y = tl.getJSONObject(i)
@@ -85,6 +97,8 @@ class AiTest {
                         val p = y.getInt("pos")
                         val score = bf.ai.physicalScore(u, p)
                         val tv = bf.ai.terrainValue(u, p)
+                        val sv = if (hasList) bf.ai.strategyScore(u, p, 0) else 0L
+                        val sb = if (hasList) hex(y.getString("sbest")) else emptyList()
                         val plen = mem.u8(Ai.PATH_LENGTH)
                         val path = (0 until plen).joinToString("") { "%02x".format(bf.ai.path[it].toInt() and 0xff) }
                         val spread = (0 until 0x80).joinToString("") { "%02x".format(mem.u8(0x500E49L + it)) }
@@ -95,13 +109,16 @@ class AiTest {
                             "路徑 ${y.getString("path").take(2 * plen)}/$path".takeIf { y.getString("path").take(2 * plen) != path },
                             "擴散記錄".takeIf { y.getString("spread") != spread },
                             "地形價值 ${y.getInt("terrain")}/$tv".takeIf { y.getInt("terrain") != tv },
+                            "策略得分 ${y.optLong("strat")}/$sv".takeIf { hasList && y.optLong("strat") != sv },
+                            "策略目標 ${sb.getOrNull(0)}/${mem.u8(Ai.STRAT_TARGET)}".takeIf { hasList && sb[0] != mem.u8(Ai.STRAT_TARGET) },
+                            "策略 ${sb.getOrNull(0x14)}/${mem.u8(Ai.STRAT_BEST)}".takeIf { hasList && sb[0x14] != mem.u8(Ai.STRAT_BEST) },
                             "亂數".takeIf { y.getLong("seed") != mem.u32(0x48ECD4L) },
                         )
                         if (diffs.isNotEmpty()) bad += "$where 位置 %04x：$diffs".format(p)
                     }
                     val fu = x.getJSONObject("full")
                     if (!fu.getBoolean("ok")) continue
-                    if (hex(fu.getString("strategies"))[0] != 0xFF) { skipped++; continue }
+                    if (!hasList && hex(fu.getString("strategies"))[0] != 0xFF) { skipped++; continue }
                     full++
                     setup()
                     bf.search.search(u, mp, 4, 0xFFFF, 1)
@@ -124,7 +141,7 @@ class AiTest {
                 }
             }
         }
-        println("AI 評估：物理得分 $tiles 格、模式 4 搜尋 $full 次（有策略略過 $skipped）")
+        println("AI 評估：策略清單 $lists、物理／策略得分 $tiles 格、模式 4 搜尋 $full 次（有策略略過 $skipped）")
         if (bad.isNotEmpty()) fail("${bad.size} 筆不同：\n" + bad.take(30).joinToString("\n"))
         assertTrue(tiles > 0)
     }

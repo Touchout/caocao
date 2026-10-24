@@ -26,5 +26,7 @@ tasks.test {
     project.findProperty("game")?.let { systemProperty("ccz.game", it) }
     // 很慢的測試（全部關卡跑回合流程，約 5 分鐘）：再加 -Pslow
     project.findProperty("slow")?.let { systemProperty("ccz.slow", it) }
+    // 換別的 AI 比對資料：-PaiVectors=<檔案>
+    project.findProperty("aiVectors")?.let { systemProperty("ccz.aiVectors", it) }
     testLogging { events("passed", "failed", "skipped"); showStandardStreams = true }
 }

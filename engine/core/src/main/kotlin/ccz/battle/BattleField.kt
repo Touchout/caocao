@@ -37,6 +37,8 @@ class BattleField(
     val combat by lazy { Combat(this) }
     /** 記一筆還沒移植的原版路徑。 */
     fun gapNote(s: String) = gap(s)
+    /** 策略的判定、傷害、命中。 */
+    val strategies by lazy { Strategies(this) }
     /** 電腦方的行動評估（0x43A55E…）。 */
     val ai by lazy { Ai(this) }
     /** 攻擊範圍（0x43F8C0、0x436511）。 */

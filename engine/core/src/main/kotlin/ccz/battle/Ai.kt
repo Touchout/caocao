@@ -1,6 +1,7 @@
 package ccz.battle
 
 import ccz.data.Characters
+import ccz.data.Equipment
 import ccz.script.EngineMemory
 
 /**
@@ -198,10 +199,13 @@ class Ai(private val bf: BattleField) {
      * （4：1 格、5：5 格、7：2 格）。波及的格也記在 0x500E49（[0x500E7C] 個 byte）。旗標 0：不同方（[0x500C44] = 1 時都算）、
      * 1：同方、2：都算。強度 100 − 10 × 距離（至少 50）寫在 0x500E7D。
      */
-    fun spread(a: Long, ts: Int, type: Int, flag: Int): List<Int> {
+    fun spread(a: Long, ts: Int, type: Int, flag: Int): List<Int> = spreadAt(a, pos(Units.unit(ts)), type, flag)
+
+    /** 0x435CE9 本體：以 [center0] 為中心。 */
+    fun spreadAt(a: Long, center0: Int, type: Int, flag: Int): List<Int> {
         val out = ArrayList<Int>()
         var count = 0
-        var center = pos(Units.unit(ts))
+        var center = center0
         var limit = type
         val ap = pos(a)
         fun hit(x: Int, y: Int, order: Int) {
@@ -234,6 +238,7 @@ class Ai(private val bf: BattleField) {
                         val r = maxOf(dx, dy)
                         val x = center and 0xff
                         val y = (center shr 8) and 0xff
+                        if (dx == 0 && dy == 0) bf.gapNote("0x42399B 形狀 (0, 0)")
                         if (dx != 0 && dy != 0) {                                                  // 0x42399B
                             hit(x + dx, y - dy, r); hit(x + dx, y + dy, r); hit(x - dx, y + dy, r); hit(x - dx, y - dy, r)
                         } else if (r != 0) {
@@ -293,41 +298,317 @@ class Ai(private val bf: BattleField) {
     }
 
     /**
-     * 0x438BF3(波及清單, 得分, 種類, 攻擊方, 策略)：清單空 → 得分 > 4 時 −2，否則 2。否則每個波及的單位依種類加分
-     * （0：會打死 +10、否則 +3）。結果 < 0 → 0。種類 1–5 是策略用的，還沒移植。
+     * 0x438BF3(波及清單, 得分, 種類, 攻擊方, 策略)：清單空 → 得分 > 4 時 −2，否則 2。否則每個波及的單位依種類加分：
+     * 0：策略（要 0x4390EF 合）——是自己的目標 +3、策略傷害會打死 +10 否則 +3；物理（策略 0xFF）——預估傷害會打死 +10 否則 +3。
+     * 1：HP < 60% +5；2：攻擊狀態 < 4 +3；3、4：防禦狀態 < 4 +3；5：有健康狀態 +3（1–5 都要 0x4390EF 合）。結果 < 0 → 0。
      */
     private fun adjust(list: List<Int>, score0: Long, kind: Int, attacker: Int, strat: Int): Long {
         var score = score0.toInt()
         var bonus = 0
+        val au = Units.unit(attacker)
         if (list.isEmpty()) {
             score = if (score > 4) score - 2 else 2
         } else for (t in list) {
             val tu = Units.unit(t)
             when (kind) {
-                0 -> {
-                    val dmg = if (strat != 0xFF) { bf.gapNote("0x438BF3 策略波及"); 0L }
-                    else combat.damage(Units.unit(attacker), tu, 1, 0).value
-                    bonus += if (dmg >= mem.u32(tu + 0x10)) 10 else 3
+                0 -> if (strat == 0xFF) {
+                    bonus += if (combat.damage(au, tu, 1, 0).value >= mem.u32(tu + 0x10)) 10 else 3
+                } else if (strategies.valid(attacker, t, strat)) {
+                    if (mem.u8(au + 8) == t) bonus += 3
+                    bonus += if (strategies.damage(au, tu, strat, 0) >= mem.u32(tu + 0x10)) 10 else 3
                 }
-                else -> bf.gapNote("0x438BF3 種類 $kind")
+                1 -> if (strategies.valid(attacker, t, strat) && hpPercent(tu) < 0x3C) bonus += 5
+                2 -> if (strategies.valid(attacker, t, strat) && mem.u8(tu + 0x18) < 4) bonus += 3
+                3, 4 -> if (strategies.valid(attacker, t, strat) && mem.u8(tu + 0x19) < 4) bonus += 3
+                5 -> if (strategies.valid(attacker, t, strat) && mem.u8(tu + 0x1E) != 0) bonus += 3
             }
         }
         val r = score + bonus
         return if (r > 0) r.toLong() else 0L
     }
 
+    /** 0x4078D1：HP × 100 / HP 上限（無號）。 */
+    private fun hpPercent(u: Long): Long = ((mem.u32(u + 0x10) * 100) and M) / combat.maxHp(u)
+
     // ---- 策略得分 ----
 
-    /** 0x442A26(單位, 2, 0x4AC808)：可用的策略清單。還沒移植。 */
+    private val strategies get() = bf.strategies
+
+    /** 0x442A26(單位, 2, 0x4AC808)：可用的策略清單。 */
     fun buildStrategies(u: Long) {
-        mem.setU8(STRATEGIES, 0xFF)
-        bf.gapNote("0x442A26 策略清單")
+        strategies.build(u, 2, STRATEGIES)
     }
 
-    /** 0x439169(&位置, 旗標)：策略得分。還沒移植。 */
+    /**
+     * 0x439169(&位置, 旗標)：清單裡每個策略：範圍（0x21 用攻擊範圍 0x43F8C0，其他 0x401DFF）。範圍 byte 0 = 0xFF（以自己為中心）→
+     * 0x4358DF 的波及單位得分（0x4395DC，加總 > 0 時再加 0x40C854）加總；否則收集範圍內的目標（旗標 ≠ 0 時目標就是旗標），
+     * 每個目標得分（> 0 時加 0x40C854）。取最高，旗標 0 時記目標 [0x4B2C2C]、策略 [0x4B2C40]。
+     */
     fun strategyScore(u: Long, p: Int, flag: Int): Long {
-        if (mem.u8(STRATEGIES) != 0xFF) bf.gapNote("0x439169 策略得分")
-        return 0
+        if (flag == 0) {
+            mem.setU8(STRAT_TARGET, 0xFF)
+            mem.setU8(STRAT_BEST, 0xFF)
+        }
+        var best = 0L
+        var q = STRATEGIES
+        while (true) {
+            val s = mem.u8(q)
+            if (s == 0xFF) break
+            q++
+            val range = if (s == 0x21) bf.range.descriptor(u) else strategies.rangeOf(u, s)
+            val side = strategies.side(s)
+            if (side == 2) continue
+            if (range and 0xff == 0xFFL) {
+                bf.gapNote("0x439169 範圍 0xFF 的策略（原版 0x41A10C 的 ecx 沒清乾淨）")
+                val area = strategies.areaOf(u, s)
+                val mode = if (area != 0) mem.u8(strategies.record(s) + 0x0B) + 1 else 0
+                val list = if (mode == 0) {
+                    if (bf.occupantAt(p) == 0xFF) listOf(slotOf(u)) else emptyList()
+                } else spreadAt(u, p, area, if (mode == 1) 0 else 1)
+                var sum = 0L
+                for (t in list) {
+                    sum = (sum + targetStrategyScore(u, t, s, p, flag)) and M
+                    if (sum > 0) sum = (sum + priority(u, t)) and M
+                }
+                if (sum > best) {
+                    best = sum
+                    if (flag == 0) { mem.setU8(STRAT_TARGET, 0xFF); mem.setU8(STRAT_BEST, s) }
+                }
+                continue
+            }
+            val targets = ArrayList<Int>()
+            if (flag != 0) {
+                mem.setU32(AttackRange.LIST, flag.toLong())
+            } else {
+                bf.range.collect(u, p, range, side or 0x80, 0)
+                val sc = scripted()
+                if (sc != 0xFF) return sc.toLong()
+            }
+            var r = AttackRange.LIST
+            while (mem.u8(r) != 0xFF) targets += mem.u8(r++)
+            for (t in targets) {
+                var v = targetStrategyScore(u, t, s, p, flag)
+                if (v == 0L) continue
+                v = (v + priority(u, t)) and M
+                if (v > best) {
+                    best = v
+                    if (flag == 0) { mem.setU8(STRAT_TARGET, t); mem.setU8(STRAT_BEST, s) }
+                }
+            }
+        }
+        return best
+    }
+
+    /** 0x40C854(施放者, 目標)：不同方而且目標有特效 (0x53, 0x6F) bit 1 → 0x65；否則是自己的目標 → 0x62。 */
+    private fun priority(u: Long, t: Int): Long {
+        val tu = Units.unit(t)
+        if (effects.sideCategory(tu) != effects.sideCategory(u) && effects.value(tu, 0x53, 0x6F, 3, 0) and 2L != 0L) return 0x65
+        return if (mem.u8(u + 8) == t) 0x62 else 0
+    }
+
+    /**
+     * 0x4395DC(目標, 策略, 位置, 地形, 旗標)：依策略類別（表 0x4D1600，[0x505FDC] 時 0x4D1690）算對這個目標的得分。
+     * 細節見 docs/battle.md「策略得分」。有波及型態時最後用波及清單修正（0x438BF3）。
+     */
+    private fun targetStrategyScore(a: Long, ts: Int, s: Int, p: Int, flag: Int): Long {
+        val t = Units.unit(ts)
+        val tc = charPtr(t)
+        val range = strategies.rangeOf(a, s)
+        val area = strategies.areaOf(a, s)
+        val mode = if (area != 0) mem.u8(strategies.record(s) + 0x0B) + 1 else 0
+        var list: List<Int> = emptyList()
+        val hpPct = hpPercent(t).toInt()
+        var score = 0L
+        val slotA = slotOf(a)
+        if (range and 0xff != 0xFFL) {
+            if (mode != 0) list = spread(a, ts, area, if (mode == 1) 0 else 1)
+            if (!strategies.valid(slotA, ts, s)) return 0
+        }
+        if (s >= 0x90) return 0
+        val cat = mem.u8((if (mem.u8(0x505FDCL) != 0) 0x4D1690L else 0x4D1600L) + s)
+        var kind: Int          // 0x438BF3 的種類
+        when (cat) {
+            0, 1, 5 -> {
+                if (!strategies.valid(slotA, ts, s)) return 0
+                val d = strategies.damage(a, t, s, flag)
+                kind = 0
+                if (d.toInt() >= 0) {
+                    var v = ((d * 100) and M) / mem.u32(t + 0x10)
+                    if (v == 0L) v = 1
+                    if (v == 0x64L) score += v
+                    else {
+                        score = v
+                        if (s == 0x2B) score += statusBonus(t)
+                        else if (s in 0x1E..0x31) {
+                            when {
+                                s == 0x1E -> {
+                                    if (mem.u32(a + 0x10) < combat.maxHp(a)) score += 5
+                                    if (lowHealth(a)) score += 0x0A
+                                }
+                                s >= 0x30 -> if (!adjacentUnits(a, t)) score += 0x1B
+                                hpPct >= 0x28 -> score += 8
+                            }
+                        }
+                    }
+                }
+            }
+            4 -> {
+                if (!strategies.valid(slotA, ts, s)) return score
+                if (strategies.hitRate(0, a, t, s) < 0x23) return score
+                score += 0x1A
+                if (hpPct >= 0x50) score += 0x1A
+                kind = 0
+            }
+            0x0B -> {
+                val h = mem.u8(t + 0x1E)
+                var count = 0
+                for (i in 0 until 4) {
+                    if (h and mem.u8(0x4240D2L + i) == 0) continue
+                    val c = mem.u8(0x412793L + i)
+                    if ((score and 0xff) < c) score = (score and 0xFFFFFF00L) or c.toLong()
+                    count++
+                }
+                score = (score and 0xFFFFFF00L) or ((score + count + 5) and 0xff)
+                kind = 5
+            }
+            7, 8, 9 -> {
+                if (!lowHealth(t)) return score
+                score += 0x32
+                when (s) {
+                    0x37 -> return score
+                    0x38 -> return score + 5
+                    0x3B -> return score + 0x0A
+                }
+                kind = 1
+            }
+            3 -> {
+                if (strategies.valid(slotA, ts, s) && mem.u16(a + 0x14) <= Equipment.maxMp(mem, mem.u16(a)) / 5 &&
+                    mem.u16(t + 0x14) >= 0x1E) score += 0x14
+                return score
+            }
+            6 -> {
+                if (mem.u8(0x4D2188L + strategies.group(tc)) == 2 || strategies.hitRate(0, a, t, s) >= 0x3C) {
+                    score += 0x19
+                    if (hpPct.toByte() >= 0x50) score += 7
+                }
+                return score
+            }
+            0x0A -> {
+                if (mem.u16(t + 0x14) > Equipment.maxMp(mem, mem.u16(t)) / 5) return score
+                if (mem.u16(a + 0x14) < strategies.cost(s) + 6) return score
+                val g = strategies.group(tc)
+                when {
+                    g == 9 -> score += 1
+                    strategies.attackKind(t) != 0 || effects.hasItemCode(tc, 0x48) -> score += 0x0C
+                    g == 0 -> score += 6
+                }
+                return score
+            }
+            0x0C -> {
+                val ai = mem.u8(t + 0x0E)
+                if (ai == 3 || ai == 2) return score
+                if (s == 0x59 && learned(tc, s)) return score
+                val g = strategies.group(tc)
+                when (g) {
+                    9 -> {}
+                    0, 0x13 -> score += 0x0F
+                    8 -> score += 0x0A
+                    else -> score += bf.rng.below(if (g == 5) 5 else 4) + 0x0A
+                }
+                return score
+            }
+            2 -> {
+                if ((hpPercent(a) and 0xff) > 0x28 && strategies.attackKind(a) == 0) {
+                    score += 0x64
+                    if (flag == 0) score += physicalScore(a, p)
+                }
+                return score
+            }
+            0x0E, 0x0F -> {
+                val k = strategies.attackKind(t)
+                val d = (((s - (if (cat == 0x0E) 0x23 else 0x41)) and 0xff) shr 1)
+                fun st(i: Int) = mem.u8(t + 0x18 + d + i)
+                val add = if (cat == 0x0E) {
+                    if (d != 0) { if (st(0) >= 3) 0x0C else 0 }
+                    else when (k) {
+                        0 -> if (st(0) > 3) 0x0A else 0
+                        1 -> if (st(2) > 3) 0x0A else 0
+                        else -> if (st(0) > 3 || st(2) > 3) 0x0B else 0
+                    }
+                } else {
+                    if (d != 0) { if (st(0) < 3) 0x0B else 0 }
+                    else when (k) {
+                        0 -> if (st(0) < 3) 0x0A else 0
+                        1 -> if (st(2) < 3) 0x0A else 0
+                        else -> if (st(0) < 3 || st(2) < 3) 0x0B else 0
+                    }
+                }
+                if (add == 0) return score
+                score += add
+                kind = 0
+            }
+            else -> return score
+        }
+        if (area and 0xff != 0) score = adjust(list, score, kind, slotA, s)
+        return score
+    }
+
+    /**
+     * 0x45AFCA(a 武將, b 武將, 1)：戰場狀態下，兩個武將（各取第一個在場、HP > 0 的單位，0x42466D）八方相鄰。
+     * 武將 ≥ 0x400 的情況（0x404E16、目前行動的單位）還沒移植。
+     */
+    private fun adjacentUnits(a: Long, b: Long): Boolean {
+        if (mem.u8(Effects.GAME_MODE) != 3) return false
+        val ca = mem.u32(a)
+        val cb = mem.u32(b)
+        if (ca and 0xffff >= 0x400 || cb and 0xffff >= 0x400) { bf.gapNote("0x45AFCA 武將 ≥ 0x400"); return false }
+        fun first(c: Long): Int {
+            for (s in 0 until 0xFA) {
+                val u = Units.unit(s)
+                if (mem.u32(u) == c && mem.u8(u + 0x0C) == 2 && mem.u32(u + 0x10) != 0L) return s
+            }
+            return 0xFF
+        }
+        val sa = first(ca)
+        if (sa == 0xFF) return false
+        val sb = first(cb)
+        if (sb == 0xFF) return false
+        val p = pos(Units.unit(sa))
+        for (d in 0 until 8) {
+            val n = bf.neighbor(p, d)
+            if (n and 0xff == 0xFF) continue
+            if (bf.occupantAt(n) == sb) return true
+        }
+        return false
+    }
+
+    /** 0x417A61：10 + 攻／防／精狀態 ≥ 3 的各加表 0x481DED 的值（> 3 再 +1）。 */
+    private fun statusBonus(t: Long): Long {
+        var v = 0x0A
+        for (i in 0 until 3) {
+            val st = mem.u8(t + 0x18 + i)
+            if (st < 3) continue
+            v = (v + mem.u8(0x481DEDL + i)) and 0xff
+            if (st != 3) v++
+        }
+        return v.toLong()
+    }
+
+    /** 0x439CFE：HP > 0 而且 HP ≤ 上限 × 2/5（武將 ≥ 0x400：兵種 0x31／系別 0x32 除外，上限 / 5）。 */
+    private fun lowHealth(u: Long): Boolean {
+        val hp = mem.u32(u + 0x10)
+        if (hp == 0L) return false
+        val max = combat.maxHp(u)
+        if (mem.u32(u) < 0x400) return ((max * 2) and M) / 5 >= hp
+        val cp = charPtr(u)
+        if (mem.u8(cp + 0x2B) == 0x31 || strategies.group(cp) == 0x32) return false
+        return max / 5 >= hp
+    }
+
+    /** 0x41832B(武將, 策略) 的 al：兵種習得等級 ≠ 0 而且等級夠。 */
+    private fun learned(cp: Long, s: Int): Boolean {
+        val need = mem.u8(strategies.record(s) + 0x11 + mem.u8(cp + 0x2B))
+        return need != 0 && mem.u8(cp + 0x2C) >= need
     }
 
     // ---- 地形價值 ----
